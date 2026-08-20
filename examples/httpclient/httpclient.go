@@ -23,9 +23,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/LackOfMorals/neo4j-common/config"
-	"github.com/LackOfMorals/neo4j-common/httpclient"
-	"github.com/LackOfMorals/neo4j-common/logger"
+	"github.com/LackOfMorals/neo4j-common/external/config"
+	"github.com/LackOfMorals/neo4j-common/external/httpclient"
+	"github.com/LackOfMorals/neo4j-common/external/logger"
 )
 
 func main() {

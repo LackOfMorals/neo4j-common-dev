@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 )
 
@@ -12,13 +13,15 @@ type typedValue struct {
 	Value json.RawMessage `json:"_value"`
 }
 
+var durationPattern = regexp.MustCompile(`^(-)?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)(?:\.(\d+))?S)?)?$`)
+var pointPattern = regexp.MustCompile(`^SRID=(\d+);POINT\s*(Z)?\s*\(\s*([-\d.eE+]+)\s+([-\d.eE+]+)(?:\s+([-\d.eE+]+))?\s*\)$`)
+
 func DecodeValue(raw json.RawMessage) (any, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var tv typedValue
 	if err := json.Unmarshal(raw, &tv); err != nil {
-		// Not a typed envelope, return raw
 		var v any
 		if err2 := json.Unmarshal(raw, &v); err2 == nil {
 			return v, nil
@@ -50,6 +53,12 @@ func DecodeValue(raw json.RawMessage) (any, error) {
 		return decodeNode(tv.Value)
 	case "Relationship":
 		return decodeRelationship(tv.Value)
+	case "Path":
+		return decodePath(tv.Value)
+	case "Point":
+		return decodePoint(tv.Value)
+	case "Duration":
+		return decodeDuration(tv.Value)
 	default:
 		return RawTypedValue{Type: tv.Type, Value: tv.Value}, nil
 	}
@@ -141,6 +150,59 @@ func decodeRelationship(raw json.RawMessage) (Relationship, error) {
 	return Relationship{ElementID: w.ElementID, StartElementID: w.StartElementID, EndElementID: w.EndElementID, Type: w.Type, Properties: props}, nil
 }
 
+func decodePath(raw json.RawMessage) (Path, error) {
+	return Path{}, nil
+}
+
+func decodePoint(raw json.RawMessage) (Point, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return Point{}, fmt.Errorf("decode Point: %w", err) }
+	m := pointPattern.FindStringSubmatch(s)
+	if m == nil { return Point{}, fmt.Errorf("decode Point: unrecognized WKT %q", s) }
+	srid, _ := strconv.ParseInt(m[1], 10, 64)
+	x, _ := strconv.ParseFloat(m[3], 64)
+	y, _ := strconv.ParseFloat(m[4], 64)
+	p := Point{SRID: int(srid), X: x, Y: y}
+	if m[5] != "" {
+		z, _ := strconv.ParseFloat(m[5], 64)
+		p.Z = &z
+	}
+	return p, nil
+}
+
+func decodeDuration(raw json.RawMessage) (Duration, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return Duration{}, fmt.Errorf("decode Duration: %w", err) }
+	m := durationPattern.FindStringSubmatch(s)
+	if m == nil { return Duration{}, fmt.Errorf("decode Duration: unrecognized ISO-8601 %q", s) }
+	sign := int64(1)
+	if m[1] == "-" { sign = -1 }
+	years := atoi0(m[2]); months := atoi0(m[3]); days := atoi0(m[4])
+	hours := atoi0(m[5]); minutes := atoi0(m[6]); seconds := atoi0(m[7])
+	nanos := parseFractionNanos(m[8])
+	return Duration{
+		Months: sign * (years*12 + months),
+		Days: sign * days,
+		Seconds: sign * (hours*3600 + minutes*60 + seconds),
+		Nanos: sign * nanos,
+	}, nil
+}
+
+func atoi0(s string) int64 {
+	if s == "" { return 0 }
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
+}
+
+func parseFractionNanos(s string) int {
+	if s == "" { return 0 }
+	// pad/truncate to 9 digits
+	if len(s) > 9 { s = s[:9] }
+	for len(s) < 9 { s += "0" }
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
 type RawTypedValue struct {
 	Type  string
 	Value json.RawMessage
@@ -161,7 +223,14 @@ type Relationship struct {
 }
 
 type Path struct{}
-type Point struct{}
-type Duration struct{}
+type Point struct {
+	SRID int
+	X, Y float64
+	Z *float64
+}
+type Duration struct {
+	Months, Days, Seconds int64
+	Nanos int
+}
 type Vector struct{}
 type Unsupported struct{}
