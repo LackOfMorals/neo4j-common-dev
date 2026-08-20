@@ -55,6 +55,16 @@ func EncodeValue(v any) (json.RawMessage, error) {
 		return encodeDuration(val)
 	case Vector:
 		return encodeVector(val)
+	case Date:
+		return encodeDate(val)
+	case LocalTime:
+		return encodeLocalTime(val)
+	case Time:
+		return encodeTime(val)
+	case LocalDateTime:
+		return encodeLocalDateTime(val)
+	case DateTime:
+		return encodeDateTime(val)
 	default:
 		// Fallback: try JSON marshal as String
 		b, err := json.Marshal(val)
@@ -122,4 +132,34 @@ func encodeDuration(d Duration) (json.RawMessage, error) {
 	s := fmt.Sprintf("P%dM%dDT%dS", d.Months, d.Days, d.Seconds)
 	b, _ := json.Marshal(s)
 	return json.RawMessage(fmt.Sprintf(`{"$type":"Duration","_value":%s}`, b)), nil
+}
+
+func encodeDate(d Date) (json.RawMessage, error) {
+	s := fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
+	b, _ := json.Marshal(s)
+	return json.RawMessage(fmt.Sprintf(`{"$type":"Date","_value":%s}`, b)), nil
+}
+
+func encodeLocalTime(t LocalTime) (json.RawMessage, error) {
+	s := fmt.Sprintf("%02d:%02d:%02d", t.Hour, t.Minute, t.Second)
+	b, _ := json.Marshal(s)
+	return json.RawMessage(fmt.Sprintf(`{"$type":"LocalTime","_value":%s}`, b)), nil
+}
+
+func encodeTime(t Time) (json.RawMessage, error) {
+	s := fmt.Sprintf("%02d:%02d:%02d%s", t.LocalTime.Hour, t.LocalTime.Minute, t.LocalTime.Second, t.Offset)
+	b, _ := json.Marshal(s)
+	return json.RawMessage(fmt.Sprintf(`{"$type":"Time","_value":%s}`, b)), nil
+}
+
+func encodeLocalDateTime(ldt LocalDateTime) (json.RawMessage, error) {
+	s := fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02d", ldt.Date.Year, ldt.Date.Month, ldt.Date.Day, ldt.LocalTime.Hour, ldt.LocalTime.Minute, ldt.LocalTime.Second)
+	b, _ := json.Marshal(s)
+	return json.RawMessage(fmt.Sprintf(`{"$type":"LocalDateTime","_value":%s}`, b)), nil
+}
+
+func encodeDateTime(dt DateTime) (json.RawMessage, error) {
+	s := fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02d%s", dt.LocalDateTime.Date.Year, dt.LocalDateTime.Date.Month, dt.LocalDateTime.Date.Day, dt.LocalDateTime.LocalTime.Hour, dt.LocalDateTime.LocalTime.Minute, dt.LocalDateTime.LocalTime.Second, dt.Offset)
+	b, _ := json.Marshal(s)
+	return json.RawMessage(fmt.Sprintf(`{"$type":"DateTime","_value":%s}`, b)), nil
 }
