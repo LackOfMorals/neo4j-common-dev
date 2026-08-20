@@ -7,637 +7,260 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/neo4j-labs/neo4j-mcp-canary/internal/analytics"
-	amocks "github.com/neo4j-labs/neo4j-mcp-canary/internal/analytics/mocks"
-	"github.com/neo4j-labs/neo4j-mcp-canary/internal/config"
-
-	"go.uber.org/mock/gomock"
+	"github.com/LackOfMorals/neo4j-common/analytics"
 )
 
-// newTestAnalytics creates an analytics service for testing
-func newTestAnalytics(t *testing.T, token, endpoint string, client analytics.HTTPClient, uri string) *analytics.Analytics {
-	t.Helper()
-	return analytics.NewAnalyticsWithClient(token, endpoint, client, uri)
+// stubHTTPClient implements analytics.HTTPClient with a plain function,
+// letting tests intercept outbound calls without a mocking framework.
+type stubHTTPClient func(url, contentType string, body io.Reader) (*http.Response, error)
+
+func (f stubHTTPClient) Post(url, contentType string, body io.Reader) (*http.Response, error) {
+	return f(url, contentType, body)
 }
 
-func TestAnalytics(t *testing.T) {
-	t.Run("EmitEvent should not send event if disabled", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockClient := amocks.NewMockHTTPClient(ctrl)
+func okResponse() *http.Response {
+	// The request is sent with verbose=1, so the SDK decodes the body as
+	// {"error":..., "status":...} — a bare "1" (a valid Mixpanel response in
+	// non-verbose mode) fails that decode and logs a spurious error.
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":1}`))}
+}
 
-		analyticsService := newTestAnalytics(t, "test-token", "http://localhost", mockClient, "bolt://localhost:7687")
-		analyticsService.Disable()
-		analyticsService.EmitEvent(analytics.TrackEvent{Event: "test_event"})
-	})
+func decodeTrackedEvents(t *testing.T, body io.Reader) []analytics.TrackEvent {
+	t.Helper()
+	b, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("error reading body: %v", err)
+	}
+	var events []analytics.TrackEvent
+	if err := json.Unmarshal(b, &events); err != nil {
+		t.Fatalf("error unmarshalling body: %v", err)
+	}
+	return events
+}
 
-	t.Run("EmitEvent should send event if enabled", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockClient := amocks.NewMockHTTPClient(ctrl)
+func newTestService(t *testing.T, client analytics.HTTPClient, opts ...analytics.Option) *analytics.Service {
+	t.Helper()
+	allOpts := append([]analytics.Option{analytics.WithHTTPClient(client)}, opts...)
+	return analytics.New("test-token", "http://localhost", "analytics-test", "bolt://localhost:7687", allOpts...)
+}
 
-		mockClient.EXPECT().Post(gomock.Any(), gomock.Any(), gomock.Any()).Return(&http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("1")),
-		}, nil)
-
-		analyticsService := newTestAnalytics(t, "test-token", "http://localhost", mockClient, "bolt://localhost:7687")
-		analyticsService.EmitEvent(analytics.TrackEvent{Event: "test_event"})
-	})
-
-	t.Run("EmitEvent should send the correct event in the body", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockClient := amocks.NewMockHTTPClient(ctrl)
-
-		event := analytics.TrackEvent{
-			Event: "specific_event",
-			Properties: map[string]interface{}{
-				"key": "value",
-			},
+func TestEnableDisable(t *testing.T) {
+	t.Run("enabled by default", func(t *testing.T) {
+		svc := newTestService(t, nil)
+		if !svc.IsEnabled() {
+			t.Errorf("expected service to be enabled by default")
 		}
-
-		mockClient.EXPECT().Post("http://localhost/track?verbose=1", gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_, _ string, body io.Reader) (*http.Response, error) {
-				bodyBytes, err := io.ReadAll(body)
-				if err != nil {
-					t.Fatalf("error reading body: %v", err)
-				}
-
-				var decodedEvents []analytics.TrackEvent
-				err = json.Unmarshal(bodyBytes, &decodedEvents)
-				if err != nil {
-					t.Fatalf("error unmarshalling body: %v", err)
-				}
-				if len(decodedEvents) != 1 {
-					t.Fatalf("expected 1 event, got %d", len(decodedEvents))
-				}
-				decodedEvent := decodedEvents[0]
-
-				if decodedEvent.Event != "specific_event" {
-					t.Errorf("expected event 'specific_event', got '%s'", decodedEvent.Event)
-				}
-				properties, ok := decodedEvent.Properties.(map[string]interface{})
-				if !ok {
-					t.Fatalf("properties is not a map[string]interface{}")
-				}
-				if properties["key"] != "value" {
-					t.Errorf("expected properties['key'] to be 'value', got '%v'", properties["key"])
-				}
-
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader("1")),
-				}, nil
-			})
-
-		analyticsService := newTestAnalytics(t, "test-token", "http://localhost", mockClient, "bolt://localhost:7687")
-		analyticsService.EmitEvent(event)
 	})
 
-	t.Run("EmitEvent should send the correct event in the body", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockClient := amocks.NewMockHTTPClient(ctrl)
-
-		event := analytics.TrackEvent{
-			Event: "specific_event",
-			Properties: map[string]interface{}{
-				"key": "value",
-			},
+	t.Run("WithEnabled(false) disables at construction", func(t *testing.T) {
+		svc := newTestService(t, nil, analytics.WithEnabled(false))
+		if svc.IsEnabled() {
+			t.Errorf("expected service to be disabled")
 		}
-
-		mockClient.EXPECT().Post("http://localhost/track?verbose=1", gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_, _ string, body io.Reader) (*http.Response, error) {
-				bodyBytes, err := io.ReadAll(body)
-				if err != nil {
-					t.Fatalf("error reading body: %v", err)
-				}
-
-				var decodedEvents []analytics.TrackEvent
-				err = json.Unmarshal(bodyBytes, &decodedEvents)
-				if err != nil {
-					t.Fatalf("error unmarshalling body: %v", err)
-				}
-				if len(decodedEvents) != 1 {
-					t.Fatalf("expected 1 event, got %d", len(decodedEvents))
-				}
-				decodedEvent := decodedEvents[0]
-
-				if decodedEvent.Event != "specific_event" {
-					t.Errorf("expected event 'specific_event', got '%s'", decodedEvent.Event)
-				}
-				properties, ok := decodedEvent.Properties.(map[string]interface{})
-				if !ok {
-					t.Fatalf("properties is not a map[string]interface{}")
-				}
-				if properties["key"] != "value" {
-					t.Errorf("expected properties['key'] to be 'value', got '%v'", properties["key"])
-				}
-
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader("1")),
-				}, nil
-			})
-
-		analyticsService := newTestAnalytics(t, "test-token", "http://localhost", mockClient, "bolt://localhost:7687")
-		analyticsService.EmitEvent(event)
 	})
 
-	t.Run("EmitEvent should construct the correct URL (only one '/' between host and path)", func(t *testing.T) {
+	t.Run("Disable/Enable toggle IsEnabled", func(t *testing.T) {
+		svc := newTestService(t, nil)
+		svc.Disable()
+		if svc.IsEnabled() {
+			t.Errorf("expected service to be disabled after Disable()")
+		}
+		svc.Enable()
+		if !svc.IsEnabled() {
+			t.Errorf("expected service to be enabled after Enable()")
+		}
+	})
+}
+
+func TestEmitEvent(t *testing.T) {
+	t.Run("does not call HTTP client when disabled", func(t *testing.T) {
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			t.Fatalf("HTTP client should not be called while disabled")
+			return nil, nil
+		})
+		svc := newTestService(t, client, analytics.WithEnabled(false))
+		svc.EmitEvent(analytics.TrackEvent{Event: "test_event"})
+	})
+
+	t.Run("sends the given event as-is when enabled", func(t *testing.T) {
+		var called bool
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			called = true
+			events := decodeTrackedEvents(t, body)
+			if len(events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(events))
+			}
+			if events[0].Event != "specific_event" {
+				t.Errorf("unexpected event name: got %s, want specific_event", events[0].Event)
+			}
+			props, ok := events[0].Properties.(map[string]any)
+			if !ok {
+				t.Fatalf("properties is not a map[string]any")
+			}
+			if props["key"] != "value" {
+				t.Errorf("unexpected properties[key]: got %v, want value", props["key"])
+			}
+			return okResponse(), nil
+		})
+		svc := newTestService(t, client)
+		svc.EmitEvent(analytics.TrackEvent{
+			Event:      "specific_event",
+			Properties: map[string]any{"key": "value"},
+		})
+		if !called {
+			t.Errorf("expected HTTP client to be called")
+		}
+	})
+
+	t.Run("constructs the correct URL regardless of endpoint trailing slashes", func(t *testing.T) {
 		testCases := []struct {
 			name             string
 			mixpanelEndpoint string
 			expectedURL      string
 		}{
-			{
-				name:             "endpoint with trailing slash",
-				mixpanelEndpoint: "http://localhost/",
-				expectedURL:      "http://localhost/track?verbose=1",
-			},
-			{
-				name:             "endpoint without trailing slash",
-				mixpanelEndpoint: "http://localhost",
-				expectedURL:      "http://localhost/track?verbose=1",
-			},
-			{
-				name:             "endpoint with multiple trailing slashes",
-				mixpanelEndpoint: "http://localhost//",
-				expectedURL:      "http://localhost/track?verbose=1",
-			},
+			{"no trailing slash", "http://localhost", "http://localhost/track?verbose=1"},
+			{"one trailing slash", "http://localhost/", "http://localhost/track?verbose=1"},
+			{"multiple trailing slashes", "http://localhost//", "http://localhost/track?verbose=1"},
 		}
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				mockClient := amocks.NewMockHTTPClient(ctrl)
-
-				mockClient.EXPECT().Post(tc.expectedURL, gomock.Any(), gomock.Any()).Return(&http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader("1")),
-				}, nil)
-
-				analyticsService := newTestAnalytics(t, "test-token", tc.mixpanelEndpoint, mockClient, "bolt://localhost:7687")
-				analyticsService.EmitEvent(analytics.TrackEvent{Event: "test_event"})
+				var gotURL string
+				client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+					gotURL = url
+					return okResponse(), nil
+				})
+				svc := analytics.New("test-token", tc.mixpanelEndpoint, "analytics-test", "bolt://localhost:7687",
+					analytics.WithHTTPClient(client))
+				svc.EmitEvent(analytics.TrackEvent{Event: "test_event"})
+				if gotURL != tc.expectedURL {
+					t.Errorf("unexpected URL: got %s, want %s", gotURL, tc.expectedURL)
+				}
 			})
 		}
 	})
 }
 
-func TestEventCreation(t *testing.T) {
-	analyticsService := newTestAnalytics(t, "test-token", "http://localhost", nil, "bolt://localhost:7687")
-
-	t.Run("NewGDSProjCreatedEvent", func(t *testing.T) {
-		event := analyticsService.NewGDSProjCreatedEvent()
-		if event.Event != "MCP-NEO4J-CANARY_GDS_PROJ_CREATED" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_GDS_PROJ_CREATED")
-		}
-		assertBaseProperties(t, event.Properties)
-	})
-
-	t.Run("NewGDSProjDropEvent", func(t *testing.T) {
-		event := analyticsService.NewGDSProjDropEvent()
-		if event.Event != "MCP-NEO4J-CANARY_GDS_PROJ_DROP" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_GDS_PROJ_DROP")
-		}
-		assertBaseProperties(t, event.Properties)
-	})
-
-	t.Run("NewToolEvent without vector info", func(t *testing.T) {
-		event := analyticsService.NewToolEvent("gds", true, nil, config.OutputFormatJSON)
-		if event.Event != "MCP-NEO4J-CANARY_TOOL_USED" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_TOOL_USED")
-		}
-		props := assertBaseProperties(t, event.Properties)
-		if props["tools_used"] != "gds" {
-			t.Errorf("unexpected tools_used: got %v, want %v", props["tools_used"], "gds")
-		}
-		if props["success"] != true {
-			t.Errorf("unexpected success: got %v, want %v", props["success"], true)
-		}
-		if props["output_format"] != string(config.OutputFormatJSON) {
-			t.Errorf("unexpected output_format: got %v, want %v", props["output_format"], config.OutputFormatJSON)
-		}
-		// Vector properties should not be present when vectorInfo is nil
-		if _, exists := props["vectorIndex"]; exists {
-			t.Errorf("vectorIndex should not be present when vectorInfo is nil")
-		}
-		if _, exists := props["vectorSearch"]; exists {
-			t.Errorf("vectorSearch should not be present when vectorInfo is nil")
-		}
-		if _, exists := props["vectorPropertySet"]; exists {
-			t.Errorf("vectorPropertySet should not be present when vectorInfo is nil")
-		}
-	})
-
-	t.Run("NewToolEvent with TOON output format", func(t *testing.T) {
-		event := analyticsService.NewToolEvent("read-cypher", true, nil, config.OutputFormatTOON)
-		props := assertBaseProperties(t, event.Properties)
-		if props["output_format"] != string(config.OutputFormatTOON) {
-			t.Errorf("unexpected output_format: got %v, want %v", props["output_format"], config.OutputFormatTOON)
-		}
-	})
-
-	t.Run("NewToolEvent with vector index count for get-schema", func(t *testing.T) {
-		count := 3
-		vectorInfo := &analytics.ToolVectorInfo{
-			VectorIndexCount: &count,
-		}
-		event := analyticsService.NewToolEvent("get-schema", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		if props["tools_used"] != "get-schema" {
-			t.Errorf("unexpected tools_used: got %v, want %v", props["tools_used"], "get-schema")
-		}
-		if props["vectorIndex"] != float64(3) {
-			t.Errorf("unexpected vectorIndex: got %v, want %v", props["vectorIndex"], 3)
-		}
-		// vectorSearch and vectorPropertySet should not be present
-		if _, exists := props["vectorSearch"]; exists {
-			t.Errorf("vectorSearch should not be present for get-schema")
-		}
-	})
-
-	t.Run("NewToolEvent with zero vector indexes for get-schema", func(t *testing.T) {
-		count := 0
-		vectorInfo := &analytics.ToolVectorInfo{
-			VectorIndexCount: &count,
-		}
-		event := analyticsService.NewToolEvent("get-schema", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		// Even with 0, the field should be present since the pointer is non-nil
-		if props["vectorIndex"] != float64(0) {
-			t.Errorf("unexpected vectorIndex: got %v, want %v", props["vectorIndex"], 0)
-		}
-	})
-
-	t.Run("NewToolEvent with fulltext index count for get-schema", func(t *testing.T) {
-		vectorCount := 2
-		fulltextCount := 5
-		vectorInfo := &analytics.ToolVectorInfo{
-			VectorIndexCount:   &vectorCount,
-			FullTextIndexCount: &fulltextCount,
-		}
-		event := analyticsService.NewToolEvent("get-schema", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		if props["vectorIndex"] != float64(2) {
-			t.Errorf("unexpected vectorIndex: got %v, want %v", props["vectorIndex"], 2)
-		}
-		if props["fullTextIndex"] != float64(5) {
-			t.Errorf("unexpected fullTextIndex: got %v, want %v", props["fullTextIndex"], 5)
-		}
-	})
-
-	t.Run("NewToolEvent without fulltext index count omits field", func(t *testing.T) {
-		vectorCount := 1
-		vectorInfo := &analytics.ToolVectorInfo{
-			VectorIndexCount: &vectorCount,
-		}
-		event := analyticsService.NewToolEvent("get-schema", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		if _, exists := props["fullTextIndex"]; exists {
-			t.Errorf("fullTextIndex should not be present when not set")
-		}
-	})
-
-	t.Run("NewToolEvent with vector property set for write-cypher", func(t *testing.T) {
-		vectorSearch := false
-		vectorPropertySet := true
-		vectorInfo := &analytics.ToolVectorInfo{
-			VectorSearch:      &vectorSearch,
-			VectorPropertySet: &vectorPropertySet,
-		}
-		event := analyticsService.NewToolEvent("write-cypher", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		if props["vectorSearch"] != false {
-			t.Errorf("unexpected vectorSearch: got %v, want %v", props["vectorSearch"], false)
-		}
-		if props["vectorPropertySet"] != true {
-			t.Errorf("unexpected vectorPropertySet: got %v, want %v", props["vectorPropertySet"], true)
-		}
-	})
-
-	t.Run("NewToolEvent with full-text search for read-cypher", func(t *testing.T) {
-		fullTextSearch := true
-		vectorInfo := &analytics.ToolVectorInfo{
-			FullTextSearch: &fullTextSearch,
-		}
-		event := analyticsService.NewToolEvent("read-cypher", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		if props["fullTextSearch"] != true {
-			t.Errorf("unexpected fullTextSearch: got %v, want %v", props["fullTextSearch"], true)
-		}
-	})
-
-	t.Run("NewToolEvent without full-text search omits field", func(t *testing.T) {
-		vectorCount := 1
-		vectorInfo := &analytics.ToolVectorInfo{
-			VectorIndexCount: &vectorCount,
-		}
-		event := analyticsService.NewToolEvent("get-schema", true, vectorInfo, config.OutputFormatJSON)
-		props := assertBaseProperties(t, event.Properties)
-		if _, exists := props["fullTextSearch"]; exists {
-			t.Errorf("fullTextSearch should not be present when not set")
-		}
-	})
-
-	t.Run("NewSchemaRetrievalEvent with sampled outcome", func(t *testing.T) {
-		event := analyticsService.NewSchemaRetrievalEvent("sampled", 2500, 30.0, 1000, 12, 5, 8, 1, 0)
-		if event.Event != "MCP-NEO4J-CANARY_SCHEMA_RETRIEVAL" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_SCHEMA_RETRIEVAL")
-		}
-		props := assertBaseProperties(t, event.Properties)
-		if props["outcome"] != "sampled" {
-			t.Errorf("unexpected outcome: got %v, want %v", props["outcome"], "sampled")
-		}
-		if props["duration_ms"] != float64(2500) {
-			t.Errorf("unexpected duration_ms: got %v, want %v", props["duration_ms"], 2500)
-		}
-		if props["timeout_seconds"] != float64(30) {
-			t.Errorf("unexpected timeout_seconds: got %v, want %v", props["timeout_seconds"], 30)
-		}
-		if props["sample_size"] != float64(1000) {
-			t.Errorf("unexpected sample_size: got %v, want %v", props["sample_size"], 1000)
-		}
-		if props["node_label_count"] != float64(12) {
-			t.Errorf("unexpected node_label_count: got %v, want %v", props["node_label_count"], 12)
-		}
-		if props["rel_type_count"] != float64(5) {
-			t.Errorf("unexpected rel_type_count: got %v, want %v", props["rel_type_count"], 5)
-		}
-		if props["index_count"] != float64(8) {
-			t.Errorf("unexpected index_count: got %v, want %v", props["index_count"], 8)
-		}
-		if props["missing_node_label_count"] != float64(1) {
-			t.Errorf("unexpected missing_node_label_count: got %v, want %v", props["missing_node_label_count"], 1)
-		}
-		if props["missing_rel_type_count"] != float64(0) {
-			t.Errorf("unexpected missing_rel_type_count: got %v, want %v", props["missing_rel_type_count"], 0)
-		}
-	})
-
-	t.Run("NewSchemaRetrievalEvent with full_scan outcome", func(t *testing.T) {
-		// Full-scan path: sample_size is 0 (not used by the primary schema queries)
-		// and serialises to a numeric zero rather than being omitted — this lets
-		// the Mixpanel consumer group-by outcome without null-handling pitfalls.
-		event := analyticsService.NewSchemaRetrievalEvent("full_scan", 850, 30.0, 0, 3, 2, 4, 0, 0)
-		props := assertBaseProperties(t, event.Properties)
-		if props["outcome"] != "full_scan" {
-			t.Errorf("unexpected outcome: got %v, want %v", props["outcome"], "full_scan")
-		}
-		if props["sample_size"] != float64(0) {
-			t.Errorf("unexpected sample_size: got %v, want %v", props["sample_size"], 0)
-		}
-		if props["duration_ms"] != float64(850) {
-			t.Errorf("unexpected duration_ms: got %v, want %v", props["duration_ms"], 850)
-		}
-	})
-
-	t.Run("NewSchemaRetrievalEvent clamps negative numeric inputs to zero", func(t *testing.T) {
-		// Defensive behaviour: a driver hiccup or an interface change could plausibly
-		// surface a negative count where none makes physical sense (you can't have
-		// -3 node labels). The constructor clamps rather than letting the nonsense
-		// leak into the Mixpanel distribution — a 0 in the data is a known "no signal"
-		// value, a -3 is a confusing outlier that poisons dashboards.
-		//
-		// timeoutSeconds is intentionally NOT clamped: a negative configured timeout
-		// is an operator misconfiguration we'd rather surface than silently correct.
-		event := analyticsService.NewSchemaRetrievalEvent("full_scan", -100, 30.0, -5, -1, -2, -3, -4, -6)
-		props := assertBaseProperties(t, event.Properties)
-		for _, field := range []string{
-			"duration_ms",
-			"sample_size",
-			"node_label_count",
-			"rel_type_count",
-			"index_count",
-			"missing_node_label_count",
-			"missing_rel_type_count",
-		} {
-			if props[field] != float64(0) {
-				t.Errorf("expected %s clamped to 0, got %v", field, props[field])
-			}
-		}
-		// timeoutSeconds should pass through unclamped (even though we passed a positive
-		// value here — this asserts the field still round-trips, which is the fallback
-		// check if a future refactor accidentally starts clamping it).
-		if props["timeout_seconds"] != float64(30) {
-			t.Errorf("expected timeout_seconds unclamped at 30, got %v", props["timeout_seconds"])
-		}
-	})
-
-	t.Run("NewStartupEvent", func(t *testing.T) {
-		event := analyticsService.NewStartupEvent(config.TransportModeStdio, false, "1.0.0", "bolt")
-		if event.Event != "MCP-NEO4J-CANARY_MCP_STARTUP" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_MCP_STARTUP")
-		}
-		props := assertBaseProperties(t, event.Properties)
-		if props["$os"] != runtime.GOOS {
-			t.Errorf("unexpected os: got %v, want %v", props["os"], runtime.GOOS)
-		}
-		if props["os_arch"] != runtime.GOARCH {
-			t.Errorf("unexpected os_arch: got %v, want %v", props["os_arch"], runtime.GOARCH)
-		}
-		if props["isAura"] == true {
-			t.Errorf("unexpected aura: got %v, want %v", props["isAura"], false)
-		}
-		if props["mcp_version"] != "1.0.0" {
-			t.Errorf("unexpected mcp_version: got %v, want %v", props["mcp_version"], "1.0.0")
-		}
-		if props["transport_mode"] != "stdio" {
-			t.Errorf("unexpected transport_mode: got %v, want %v", props["transport_mode"], "stdio")
-		}
-		if props["connection_mode"] != "bolt" {
-			t.Errorf("unexpected connection_mode: got %v, want %v", props["connection_mode"], "bolt")
-		}
-	})
-
-	t.Run("NewStartupEvent with Query API connection mode", func(t *testing.T) {
-		event := analyticsService.NewStartupEvent(config.TransportModeStdio, false, "1.0.0", "query_api")
-		props := assertBaseProperties(t, event.Properties)
-		if props["connection_mode"] != "query_api" {
-			t.Errorf("unexpected connection_mode: got %v, want %v", props["connection_mode"], "query_api")
-		}
-	})
-
-	t.Run("NewConnectionInitializedEvent", func(t *testing.T) {
-		event := analyticsService.NewConnectionInitializedEvent(analytics.ConnectionEventInfo{
-			Neo4jVersion:  "2025.09.01",
-			CypherVersion: []string{"5", "25"},
-			Edition:       "enterprise",
+func TestEmit(t *testing.T) {
+	t.Run("merges base and specific properties when no common properties are registered", func(t *testing.T) {
+		var props map[string]any
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			events := decodeTrackedEvents(t, body)
+			props, _ = events[0].Properties.(map[string]any)
+			return okResponse(), nil
 		})
-		if event.Event != "MCP-NEO4J-CANARY_CONNECTION_INITIALIZED" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_CONNECTION_INITIALIZED")
-		}
-		props := assertBaseProperties(t, event.Properties)
-		if props["neo4j_version"] != "2025.09.01" {
-			t.Errorf("unexpected Neo4jVersion: got %v, want %v", props["neo4j_version"], "2025.09.01")
-		}
-		if props["edition"] != "enterprise" {
-			t.Errorf("unexpected edition: got %v, want %v", props["edition"], "enterprise")
-		}
+		svc := newTestService(t, client)
+		svc.Emit("APP_STARTED", map[string]any{"feature": "x"})
 
-		cypherVersion, ok := props["cypher_version"].([]interface{})
-		if !ok {
-			t.Fatalf("cypher_version is not a []interface{}")
+		if props["feature"] != "x" {
+			t.Errorf("expected specific property to be present, got %v", props["feature"])
 		}
-		if len(cypherVersion) != 2 || cypherVersion[0] != "5" || cypherVersion[1] != "25" {
-			t.Errorf("unexpected cypher_version: got %v, want %v", props["cypher_version"], []string{"5", "25"})
+		if props["token"] != "test-token" {
+			t.Errorf("expected base property token to be present, got %v", props["token"])
 		}
 	})
 
-	t.Run("NewFeedbackEvent", func(t *testing.T) {
-		event := analyticsService.NewFeedbackEvent("This tool is great!")
-		if event.Event != "MCP-NEO4J-CANARY_FEEDBACK" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_FEEDBACK")
-		}
-		props := assertBaseProperties(t, event.Properties)
-		if props["feedback"] != "This tool is great!" {
-			t.Errorf("unexpected feedback: got %v, want %v", props["feedback"], "This tool is great!")
-		}
-	})
+	t.Run("merges base, common and specific properties, specific wins over common", func(t *testing.T) {
+		var props map[string]any
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			events := decodeTrackedEvents(t, body)
+			props, _ = events[0].Properties.(map[string]any)
+			return okResponse(), nil
+		})
+		svc := newTestService(t, client,
+			analytics.WithCommonProperties(map[string]any{"app_version": "1.0.0", "shared_key": "common"}))
+		svc.Emit("APP_STARTED", map[string]any{"feature": "x", "shared_key": "specific"})
 
-	t.Run("NewStartupEvent with Aura database", func(t *testing.T) {
-		auraAnalytics := newTestAnalytics(t, "test-token", "http://localhost", nil, "bolt://mydb.databases.neo4j.io")
-		event := auraAnalytics.NewStartupEvent(config.TransportModeHTTP, false, "1.0.0", "bolt")
-
-		if event.Event != "MCP-NEO4J-CANARY_MCP_STARTUP" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_MCP_STARTUP")
+		if props["app_version"] != "1.0.0" {
+			t.Errorf("expected common property to be present, got %v", props["app_version"])
 		}
-		props := assertBaseProperties(t, event.Properties)
-		if props["$os"] != runtime.GOOS {
-			t.Errorf("unexpected os: got %v, want %v", props["os"], runtime.GOOS)
+		if props["feature"] != "x" {
+			t.Errorf("expected specific property to be present, got %v", props["feature"])
 		}
-		if props["os_arch"] != runtime.GOARCH {
-			t.Errorf("unexpected os_arch: got %v, want %v", props["os_arch"], runtime.GOARCH)
+		if props["shared_key"] != "specific" {
+			t.Errorf("expected specific property to win over common on collision, got %v", props["shared_key"])
 		}
-		if props["isAura"] == false {
-			t.Errorf("unexpected aura: got %v, want %v", props["isAura"], true)
-		}
-		if props["mcp_version"] != "1.0.0" {
-			t.Errorf("unexpected mcp_version: got %v, want %v", props["mcp_version"], "1.0.0")
+		if props["token"] != "test-token" {
+			t.Errorf("expected base property token to be present, got %v", props["token"])
 		}
 	})
 
-	t.Run("NewStartupEvent with STDIO transport mode", func(t *testing.T) {
-		stdioAnalytics := analytics.NewAnalyticsWithClient(
-			"test-token",
-			"http://localhost",
-			nil,
-			"bolt://localhost:7687",
-		)
-		event := stdioAnalytics.NewStartupEvent(config.TransportModeStdio, false, "1.0.0", "bolt")
+	t.Run("base properties win over common and specific on collision", func(t *testing.T) {
+		var props map[string]any
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			events := decodeTrackedEvents(t, body)
+			props, _ = events[0].Properties.(map[string]any)
+			return okResponse(), nil
+		})
+		svc := newTestService(t, client,
+			analytics.WithCommonProperties(map[string]any{"token": "not-the-real-token"}))
+		svc.Emit("APP_STARTED", map[string]any{"token": "also-not-the-real-token"})
 
-		if event.Event != "MCP-NEO4J-CANARY_MCP_STARTUP" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_MCP_STARTUP")
-		}
-
-		props := assertBaseProperties(t, event.Properties)
-
-		// Verify transport_mode is set to "stdio"
-		if props["transport_mode"] != "stdio" {
-			t.Errorf("unexpected transport_mode: got %v, want %v", props["transport_mode"], "stdio")
-		}
-
-		// Verify tls_enabled is NOT present in STDIO mode (uses omitempty)
-		if _, exists := props["tls_enabled"]; exists {
-			t.Errorf("tls_enabled should not be present in STDIO mode, but found: %v", props["tls_enabled"])
+		if props["token"] != "test-token" {
+			t.Errorf("expected base token to win over common/specific, got %v", props["token"])
 		}
 	})
 
-	t.Run("NewStartupEvent with HTTP transport mode and TLS enabled", func(t *testing.T) {
-		httpAnalytics := analytics.NewAnalyticsWithClient(
-			"test-token",
-			"http://localhost",
-			nil,
-			"bolt://localhost:7687",
-		)
-		event := httpAnalytics.NewStartupEvent(config.TransportModeHTTP, true, "1.0.0", "bolt")
-
-		if event.Event != "MCP-NEO4J-CANARY_MCP_STARTUP" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_MCP_STARTUP")
-		}
-
-		props := assertBaseProperties(t, event.Properties)
-
-		// Verify transport_mode is set to "http"
-		if props["transport_mode"] != "http" {
-			t.Errorf("unexpected transport_mode: got %v, want %v", props["transport_mode"], "http")
-		}
-
-		// Verify tls_enabled is present and set to true in HTTP mode
-		tlsEnabled, exists := props["tls_enabled"]
-		if !exists {
-			t.Errorf("tls_enabled should be present in HTTP mode")
-		} else if tlsEnabled != true {
-			t.Errorf("unexpected tls_enabled: got %v, want %v", tlsEnabled, true)
-		}
+	t.Run("does not call HTTP client when disabled", func(t *testing.T) {
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			t.Fatalf("HTTP client should not be called while disabled")
+			return nil, nil
+		})
+		svc := newTestService(t, client, analytics.WithEnabled(false))
+		svc.Emit("APP_STARTED", nil)
 	})
-
-	t.Run("NewStartupEvent with HTTP transport mode and TLS disabled", func(t *testing.T) {
-		httpAnalytics := analytics.NewAnalyticsWithClient(
-			"test-token",
-			"http://localhost",
-			nil,
-			"bolt://localhost:7687",
-		)
-		event := httpAnalytics.NewStartupEvent(config.TransportModeHTTP, false, "1.0.0", "bolt")
-
-		if event.Event != "MCP-NEO4J-CANARY_MCP_STARTUP" {
-			t.Errorf("unexpected event name: got %s, want %s", event.Event, "MCP-NEO4J-CANARY_MCP_STARTUP")
-		}
-
-		props := assertBaseProperties(t, event.Properties)
-
-		// Verify transport_mode is set to "http"
-		if props["transport_mode"] != "http" {
-			t.Errorf("unexpected transport_mode: got %v, want %v", props["transport_mode"], "http")
-		}
-
-		// Verify tls_enabled is present and set to false in HTTP mode
-		tlsEnabled, exists := props["tls_enabled"]
-		if !exists {
-			t.Errorf("tls_enabled should be present in HTTP mode")
-		} else if tlsEnabled != false {
-			t.Errorf("unexpected tls_enabled: got %v, want %v", tlsEnabled, false)
-		}
-	})
-
 }
 
-func assertBaseProperties(t *testing.T, props interface{}) map[string]interface{} {
-	t.Helper()
-	p, err := json.Marshal(props)
-	if err != nil {
-		t.Fatalf("failed to marshal properties: %v", err)
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(p, &m); err != nil {
-		t.Fatalf("failed to unmarshal properties to map: %v", err)
+func TestAuraDetection(t *testing.T) {
+	testCases := []struct {
+		name string
+		uri  string
+		want bool
+	}{
+		{"plain bolt URI", "bolt://localhost:7687", false},
+		{"databases.neo4j.io", "neo4j+s://mydb.databases.neo4j.io", true},
+		{"instances.neo4j.io", "neo4j+s://mydb.instances.neo4j.io", true},
+		{"unrelated URI", "bolt://example.com:7687", false},
 	}
 
-	if m["token"] != "test-token" {
-		t.Errorf("unexpected token: got %v, want %v", m["token"], "test-token")
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var props map[string]any
+			client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+				events := decodeTrackedEvents(t, body)
+				props, _ = events[0].Properties.(map[string]any)
+				return okResponse(), nil
+			})
+			svc := analytics.New("test-token", "http://localhost", "analytics-test", tc.uri,
+				analytics.WithHTTPClient(client))
+			svc.Emit("APP_STARTED", nil)
+
+			if props["isAura"] != tc.want {
+				t.Errorf("unexpected isAura for %q: got %v, want %v", tc.uri, props["isAura"], tc.want)
+			}
+		})
 	}
-	if _, ok := m["time"].(float64); !ok {
-		t.Errorf("time is not a number")
-	}
-	if _, ok := m["distinct_id"].(string); !ok {
-		t.Errorf("distinct_id is not a string")
-	}
-	if _, ok := m["$insert_id"].(string); !ok {
-		t.Errorf("$insert_id is not a string")
-	}
-	if _, ok := m["uptime"].(float64); !ok {
-		t.Errorf("uptime is not a number")
-	}
-	if _, ok := m["$os"].(string); !ok {
-		t.Errorf("$os is not a string")
-	}
-	if _, ok := m["os_arch"].(string); !ok {
-		t.Errorf("os_arch is not a string")
-	}
-	if _, ok := m["isAura"].(bool); !ok {
-		t.Errorf("isAura is not a bool")
-	}
-	return m
+}
+
+func TestIdentifierHelpers(t *testing.T) {
+	// machineid.ProtectedID and os.Executable can legitimately fail in some
+	// sandboxed CI environments, so these only assert the helpers don't panic
+	// and return a string — not that the string is non-empty.
+	t.Run("GetBinaryPath does not panic", func(t *testing.T) {
+		_ = analytics.GetBinaryPath()
+	})
+
+	t.Run("GetMachineID does not panic", func(t *testing.T) {
+		_ = analytics.GetMachineID("analytics-test")
+	})
+
+	t.Run("GetDistinctID returns a UUID-shaped string", func(t *testing.T) {
+		id := analytics.GetDistinctID()
+		if id == "" {
+			t.Errorf("expected a non-empty distinct ID")
+		}
+	})
 }

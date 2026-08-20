@@ -5,7 +5,6 @@ package analytics
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/denisbrodbeck/machineid"
@@ -21,11 +21,13 @@ import (
 	mixpanel "github.com/mixpanel/mixpanel-go"
 )
 
-// httpClientTransport adapts our HTTPClient interface into an http.RoundTripper,
-// allowing the Mixpanel SDK to use our injectable client (including mocks in tests).
+const defaultHTTPTimeout = 10 * time.Second
+
+// httpClientTransport adapts an HTTPClient into an http.RoundTripper, allowing
+// the Mixpanel SDK to use an injectable client (including test stubs).
 // The endpoint is stored here so we can rewrite the URL on every request —
 // the SDK resolves its own internal URL before hitting the transport, which
-// would otherwise bypass our configured proxy endpoint.
+// would otherwise bypass the configured endpoint.
 type httpClientTransport struct {
 	client   HTTPClient
 	endpoint string
@@ -40,113 +42,159 @@ func (t *httpClientTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return t.client.Post(url, req.Header.Get("Content-Type"), req.Body)
 }
 
-type analyticsConfig struct {
-	distinctID  string
-	machineID   string
-	binaryPath  string
-	token       string
-	startupTime int64
-	isAura      bool
-	mp          *mixpanel.ApiClient
+// Service sends analytics events to Mixpanel, attaching privacy-safe
+// identifiers (a per-run distinct ID, a hashed machine ID, a redacted binary
+// path) and, optionally, caller-defined common properties to every event.
+type Service struct {
+	distinctID       string
+	machineID        string
+	binaryPath       string
+	token            string
+	startupTime      int64
+	isAura           bool
+	mp               *mixpanel.ApiClient
+	disabled         atomic.Bool
+	commonProperties any
 }
 
-type Analytics struct {
-	disabled bool
-	cfg      analyticsConfig
+// serviceOptions holds the values Option functions configure before New
+// constructs a Service.
+type serviceOptions struct {
+	httpClient       HTTPClient
+	httpTimeout      time.Duration
+	enabled          bool
+	commonProperties any
 }
 
-// NewAnalytics creates an Analytics instance using the default http.Client.
-func NewAnalytics(mixPanelToken string, mixpanelEndpoint string, uri string) *Analytics {
-	return NewAnalyticsWithClient(mixPanelToken, mixpanelEndpoint, &http.Client{Timeout: 10 * time.Second}, uri)
+// Option configures a Service constructed by New.
+type Option func(*serviceOptions)
+
+// WithHTTPClient injects a custom HTTPClient, letting tests or callers
+// intercept outbound Mixpanel calls instead of using the default http.Client.
+func WithHTTPClient(client HTTPClient) Option {
+	return func(o *serviceOptions) { o.httpClient = client }
 }
 
-// NewAnalyticsWithClient creates an Analytics instance with an injectable HTTPClient,
-// allowing tests to intercept outbound Mixpanel calls via a mock.
-func NewAnalyticsWithClient(mixPanelToken string, mixpanelEndpoint string, client HTTPClient, uri string) *Analytics {
+// WithHTTPTimeout sets the timeout used by the default http.Client. Ignored
+// if WithHTTPClient is also given.
+func WithHTTPTimeout(d time.Duration) Option {
+	return func(o *serviceOptions) { o.httpTimeout = d }
+}
+
+// WithEnabled sets the Service's initial enabled state. Defaults to true.
+func WithEnabled(enabled bool) Option {
+	return func(o *serviceOptions) { o.enabled = enabled }
+}
+
+// WithCommonProperties registers properties attached to every event sent via
+// Emit, in addition to that call's own properties. Optional — a Service with
+// no common properties simply omits this layer.
+func WithCommonProperties(props any) Option {
+	return func(o *serviceOptions) { o.commonProperties = props }
+}
+
+// New creates a Service that reports to Mixpanel using mixPanelToken and
+// mixpanelEndpoint. appName seeds the HMAC salt used by GetMachineID, so each
+// consuming app must choose its own value — reusing an app's existing salt
+// preserves continuity of its already-collected device IDs, and picking a new
+// one starts a fresh series. uri is the Neo4j connection string used to
+// detect Aura databases for the isAura base property.
+func New(mixPanelToken, mixpanelEndpoint, appName, uri string, opts ...Option) *Service {
+	options := serviceOptions{
+		httpTimeout: defaultHTTPTimeout,
+		enabled:     true,
+	}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	endpoint := strings.TrimRight(mixpanelEndpoint, "/")
 
 	var mpClient *mixpanel.ApiClient
-	if client != nil {
-		httpClient := &http.Client{Transport: &httpClientTransport{client: client, endpoint: endpoint}}
+	if options.httpClient != nil {
+		httpClient := &http.Client{Transport: &httpClientTransport{client: options.httpClient, endpoint: endpoint}}
 		mpClient = mixpanel.NewApiClient(mixPanelToken,
 			mixpanel.HttpClient(httpClient),
 		)
 	} else {
 		mpClient = mixpanel.NewApiClient(mixPanelToken,
 			mixpanel.ProxyApiLocation(endpoint),
+			mixpanel.HttpClient(&http.Client{Timeout: options.httpTimeout}),
 		)
 	}
 
-	return &Analytics{
-		cfg: analyticsConfig{
-			distinctID:  GetDistinctID(),
-			machineID:   GetMachineID(),
-			binaryPath:  GetBinaryPath(),
-			token:       mixPanelToken,
-			startupTime: time.Now().Unix(),
-			isAura:      isAura(uri),
-			mp:          mpClient,
-		},
+	s := &Service{
+		distinctID:       GetDistinctID(),
+		machineID:        GetMachineID(appName),
+		binaryPath:       GetBinaryPath(),
+		token:            mixPanelToken,
+		startupTime:      time.Now().Unix(),
+		isAura:           isAura(uri),
+		mp:               mpClient,
+		commonProperties: options.commonProperties,
 	}
+	s.disabled.Store(!options.enabled)
+	return s
 }
 
-// Returns true if the string contains a URI used by Aura
-// With multiDB, this could be either databases.neo4j.io or instances.neo4j.io
+// isAura returns true if uri looks like a Neo4j Aura connection string.
+// With multi-DB, this could be either databases.neo4j.io or instances.neo4j.io.
+var auraURIPattern = regexp.MustCompile(`(databases|instances)\.neo4j\.io\b`)
+
 func isAura(uri string) bool {
-	// Regex to detect our URI of interest
-	re := regexp.MustCompile(`(databases|instances)\.neo4j\.io\b`)
-
-	if re.MatchString(uri) {
-		// contains a neo4j.io database or instance URL
-		return true
-	}
-
-	return false
+	return auraURIPattern.MatchString(uri)
 }
 
-func (a *Analytics) EmitEvent(event TrackEvent) {
-	if a.disabled {
+func (s *Service) Enable()         { s.disabled.Store(false) }
+func (s *Service) Disable()        { s.disabled.Store(true) }
+func (s *Service) IsEnabled() bool { return !s.disabled.Load() }
+
+// EmitEvent sends event exactly as given, with no property merging. Use Emit
+// for the common case of sending a named event with base/common/specific
+// properties merged automatically.
+func (s *Service) EmitEvent(event TrackEvent) {
+	if s.disabled.Load() {
 		return
 	}
 	slog.Info("Sending event to Mixpanel", "event", event.Event)
-	if err := a.sendTrackEvent([]TrackEvent{event}); err != nil {
+	if err := s.sendTrackEvent([]TrackEvent{event}); err != nil {
 		slog.Error("Error while sending analytics events", "error", err.Error())
 	}
 }
 
-func (a *Analytics) Enable()         { a.disabled = false }
-func (a *Analytics) Disable()        { a.disabled = true }
-func (a *Analytics) IsEnabled() bool { return !a.disabled }
+// Emit sends eventName with the merge of three property layers: the
+// Service's own base properties (distinct id, machine id, os/arch, binary
+// path, uptime, insert id, token, aura flag), the common properties
+// registered via WithCommonProperties (if any), and properties, specific to
+// this one event. On key collision, properties wins over common properties,
+// and base properties always win over both.
+func (s *Service) Emit(eventName string, properties any) {
+	if s.disabled.Load() {
+		return
+	}
+	merged, err := combineProperties(s.getBaseProperties(), s.commonProperties, properties)
+	if err != nil {
+		slog.Error("Error while building analytics event properties", "event", eventName, "error", err.Error())
+		return
+	}
+	s.EmitEvent(TrackEvent{Event: eventName, Properties: merged})
+}
 
-func (a *Analytics) sendTrackEvent(events []TrackEvent) error {
+func (s *Service) sendTrackEvent(events []TrackEvent) error {
 	sdkEvents := make([]*mixpanel.Event, 0, len(events))
 	for _, e := range events {
 		props, err := toPropertiesMap(e.Properties)
 		if err != nil {
 			return fmt.Errorf("marshal properties for event %q: %w", e.Event, err)
 		}
-		sdkEvents = append(sdkEvents, a.cfg.mp.NewEvent(e.Event, a.cfg.distinctID, props))
+		sdkEvents = append(sdkEvents, s.mp.NewEvent(e.Event, s.distinctID, props))
 	}
 
-	if err := a.cfg.mp.Track(context.Background(), sdkEvents); err != nil {
+	if err := s.mp.Track(context.Background(), sdkEvents); err != nil {
 		return fmt.Errorf("mixpanel track error: %w", err)
 	}
 	slog.Info("Sent event to Mixpanel", "event", sdkEvents[0].Name)
 	return nil
-}
-
-// toPropertiesMap converts any properties struct to map[string]any via JSON
-// so it's compatible with the SDK without duplicating field mappings.
-func toPropertiesMap(props any) (map[string]any, error) {
-	b, err := json.Marshal(props)
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
 }
 
 // GetBinaryPath returns the absolute path of the running binary via os.Executable.
@@ -198,11 +246,14 @@ func redactPath(path string) string {
 	return path
 }
 
-// GetMachineID returns a stable, privacy-safe machine identifier using the OS-provided
-// hardware UUID, HMAC-hashed with the app name so the raw system UUID is never exposed.
-// Returns an empty string on failure (e.g. insufficient permissions on some Linux configs).
-func GetMachineID() string {
-	id, err := machineid.ProtectedID("neo4j-mcp-canary")
+// GetMachineID returns a stable, privacy-safe machine identifier using the
+// OS-provided hardware UUID, HMAC-hashed with appName so the raw system UUID
+// is never exposed. appName also scopes the ID to the calling app — pass the
+// same value consistently to preserve continuity of previously-collected
+// device IDs. Returns an empty string on failure (e.g. insufficient
+// permissions on some Linux configs).
+func GetMachineID(appName string) string {
+	id, err := machineid.ProtectedID(appName)
 	if err != nil {
 		slog.Warn("Could not retrieve machine ID for analytics", "error", err)
 		return ""
@@ -210,6 +261,7 @@ func GetMachineID() string {
 	return id
 }
 
+// GetDistinctID returns a fresh UUID for use as a per-run distinct ID.
 func GetDistinctID() string {
 	id, err := uuid.NewV6()
 	if err != nil {
