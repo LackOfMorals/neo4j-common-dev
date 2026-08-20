@@ -59,6 +59,8 @@ func DecodeValue(raw json.RawMessage) (any, error) {
 		return decodePoint(tv.Value)
 	case "Duration":
 		return decodeDuration(tv.Value)
+	case "Vector":
+		return decodeVector(tv.Value)
 	default:
 		return RawTypedValue{Type: tv.Type, Value: tv.Value}, nil
 	}

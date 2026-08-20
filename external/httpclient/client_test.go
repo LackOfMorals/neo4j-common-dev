@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/LackOfMorals/neo4j-common/httpclient"
+	"github.com/LackOfMorals/neo4j-common/external/httpclient"
 )
 
 func TestDo(t *testing.T) {

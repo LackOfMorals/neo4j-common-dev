@@ -53,6 +53,8 @@ func EncodeValue(v any) (json.RawMessage, error) {
 		return encodePoint(val)
 	case Duration:
 		return encodeDuration(val)
+	case Vector:
+		return encodeVector(val)
 	default:
 		// Fallback: try JSON marshal as String
 		b, err := json.Marshal(val)
