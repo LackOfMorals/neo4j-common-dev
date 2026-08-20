@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/neo4j-labs/neo4j-mcp-canary/internal/config"
-
 	"github.com/google/uuid"
 )
 
