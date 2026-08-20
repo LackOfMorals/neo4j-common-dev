@@ -16,6 +16,11 @@ import (
 // DistinctID identifies a single run of the calling app (we don't track
 // individual end users, so in practice this is one ID per process execution).
 // InsertID is used by Mixpanel to deduplicate duplicate messages.
+//
+// IP controls Mixpanel's GeoIP lookup (https://docs.mixpanel.com/reference/import-events):
+// left empty (the default, via omitempty), Mixpanel geolocates using the
+// request's own source IP; set to "0" — via WithGeoIPTracking(false) or
+// DisableGeoIPTracking — it explicitly skips geolocation for the event.
 type baseProperties struct {
 	Token      string `json:"token"`
 	Time       int64  `json:"time"`
@@ -25,7 +30,7 @@ type baseProperties struct {
 	OS         string `json:"$os"`
 	OSArch     string `json:"os_arch"`
 	IsAura     bool   `json:"isAura"`
-	IP         string `json:"$ip,omitempty"`
+	IP         string `json:"ip,omitempty"`
 	MachineID  string `json:"machine_id,omitempty"`
 	BinaryPath string `json:"binary_path,omitempty"`
 }
@@ -38,7 +43,7 @@ type TrackEvent struct {
 
 func (s *Service) getBaseProperties() baseProperties {
 	uptime := time.Now().Unix() - s.startupTime
-	return baseProperties{
+	props := baseProperties{
 		Token:      s.token,
 		DistinctID: s.distinctID,
 		Time:       time.Now().UnixMilli(),
@@ -50,6 +55,10 @@ func (s *Service) getBaseProperties() baseProperties {
 		MachineID:  s.machineID,
 		BinaryPath: s.binaryPath,
 	}
+	if s.geoIPDisabled.Load() {
+		props.IP = "0"
+	}
+	return props
 }
 
 func newInsertID() string {

@@ -23,6 +23,11 @@ import (
 
 const defaultHTTPTimeout = 10 * time.Second
 
+// euMixpanelEndpoint is Mixpanel's EU-residency API endpoint. Projects
+// created with EU data residency only accept events sent here — the default
+// (US) endpoint silently drops them. See WithEuResidency.
+const euMixpanelEndpoint = "https://api-eu.mixpanel.com"
+
 // httpClientTransport adapts an HTTPClient into an http.RoundTripper, allowing
 // the Mixpanel SDK to use an injectable client (including test stubs).
 // The endpoint is stored here so we can rewrite the URL on every request —
@@ -54,6 +59,7 @@ type Service struct {
 	isAura           bool
 	mp               *mixpanel.ApiClient
 	disabled         atomic.Bool
+	geoIPDisabled    atomic.Bool
 	commonProperties any
 }
 
@@ -63,6 +69,8 @@ type serviceOptions struct {
 	httpClient       HTTPClient
 	httpTimeout      time.Duration
 	enabled          bool
+	geoIPEnabled     bool
+	euResidency      bool
 	commonProperties any
 }
 
@@ -86,11 +94,28 @@ func WithEnabled(enabled bool) Option {
 	return func(o *serviceOptions) { o.enabled = enabled }
 }
 
+// WithGeoIPTracking sets the Service's initial GeoIP tracking state.
+// Defaults to true, matching Mixpanel's own default (geolocate every event
+// from the request's source IP) and preserving continuity for apps that
+// were already sending events before this option existed. Pass false to
+// have every event explicitly opt out of Mixpanel's GeoIP lookup — see
+// DisableGeoIPTracking to flip this at runtime instead of at construction.
+func WithGeoIPTracking(enabled bool) Option {
+	return func(o *serviceOptions) { o.geoIPEnabled = enabled }
+}
+
 // WithCommonProperties registers properties attached to every event sent via
 // Emit, in addition to that call's own properties. Optional — a Service with
 // no common properties simply omits this layer.
 func WithCommonProperties(props any) Option {
 	return func(o *serviceOptions) { o.commonProperties = props }
+}
+
+// WithEuResidency routes every request to Mixpanel's EU-residency endpoint,
+// overriding whatever mixpanelEndpoint was passed to New — a project with EU
+// data residency only accepts events sent there. Defaults to false.
+func WithEuResidency(enabled bool) Option {
+	return func(o *serviceOptions) { o.euResidency = enabled }
 }
 
 // New creates a Service that reports to Mixpanel using mixPanelToken and
@@ -101,14 +126,18 @@ func WithCommonProperties(props any) Option {
 // detect Aura databases for the isAura base property.
 func New(mixPanelToken, mixpanelEndpoint, appName, uri string, opts ...Option) *Service {
 	options := serviceOptions{
-		httpTimeout: defaultHTTPTimeout,
-		enabled:     true,
+		httpTimeout:  defaultHTTPTimeout,
+		enabled:      true,
+		geoIPEnabled: true,
 	}
 	for _, opt := range opts {
 		opt(&options)
 	}
 
 	endpoint := strings.TrimRight(mixpanelEndpoint, "/")
+	if options.euResidency {
+		endpoint = euMixpanelEndpoint
+	}
 
 	var mpClient *mixpanel.ApiClient
 	if options.httpClient != nil {
@@ -134,6 +163,7 @@ func New(mixPanelToken, mixpanelEndpoint, appName, uri string, opts ...Option) *
 		commonProperties: options.commonProperties,
 	}
 	s.disabled.Store(!options.enabled)
+	s.geoIPDisabled.Store(!options.geoIPEnabled)
 	return s
 }
 
@@ -149,15 +179,31 @@ func (s *Service) Enable()         { s.disabled.Store(false) }
 func (s *Service) Disable()        { s.disabled.Store(true) }
 func (s *Service) IsEnabled() bool { return !s.disabled.Load() }
 
+// EnableGeoIPTracking lets Mixpanel geolocate future events from the
+// request's source IP again (Mixpanel's own default).
+func (s *Service) EnableGeoIPTracking() { s.geoIPDisabled.Store(false) }
+
+// DisableGeoIPTracking makes every future event explicitly opt out of
+// Mixpanel's GeoIP lookup, e.g. in response to a runtime consent change.
+func (s *Service) DisableGeoIPTracking() { s.geoIPDisabled.Store(true) }
+
+// IsGeoIPTrackingEnabled reports whether events currently let Mixpanel
+// geolocate them from the request's source IP.
+func (s *Service) IsGeoIPTrackingEnabled() bool { return !s.geoIPDisabled.Load() }
+
 // EmitEvent sends event exactly as given, with no property merging. Use Emit
 // for the common case of sending a named event with base/common/specific
-// properties merged automatically.
-func (s *Service) EmitEvent(event TrackEvent) {
+// properties merged automatically. ctx governs the outbound Mixpanel
+// request — cancelling it (e.g. on caller shutdown) aborts the send instead
+// of blocking for the full HTTP timeout; it does not affect the swallow-and-
+// log error handling below, which is deliberate so a telemetry failure never
+// breaks the caller's own control flow.
+func (s *Service) EmitEvent(ctx context.Context, event TrackEvent) {
 	if s.disabled.Load() {
 		return
 	}
 	slog.Info("Sending event to Mixpanel", "event", event.Event)
-	if err := s.sendTrackEvent([]TrackEvent{event}); err != nil {
+	if err := s.sendTrackEvent(ctx, []TrackEvent{event}); err != nil {
 		slog.Error("Error while sending analytics events", "error", err.Error())
 	}
 }
@@ -167,8 +213,8 @@ func (s *Service) EmitEvent(event TrackEvent) {
 // path, uptime, insert id, token, aura flag), the common properties
 // registered via WithCommonProperties (if any), and properties, specific to
 // this one event. On key collision, properties wins over common properties,
-// and base properties always win over both.
-func (s *Service) Emit(eventName string, properties any) {
+// and base properties always win over both. See EmitEvent for how ctx is used.
+func (s *Service) Emit(ctx context.Context, eventName string, properties any) {
 	if s.disabled.Load() {
 		return
 	}
@@ -177,10 +223,10 @@ func (s *Service) Emit(eventName string, properties any) {
 		slog.Error("Error while building analytics event properties", "event", eventName, "error", err.Error())
 		return
 	}
-	s.EmitEvent(TrackEvent{Event: eventName, Properties: merged})
+	s.EmitEvent(ctx, TrackEvent{Event: eventName, Properties: merged})
 }
 
-func (s *Service) sendTrackEvent(events []TrackEvent) error {
+func (s *Service) sendTrackEvent(ctx context.Context, events []TrackEvent) error {
 	sdkEvents := make([]*mixpanel.Event, 0, len(events))
 	for _, e := range events {
 		props, err := toPropertiesMap(e.Properties)
@@ -190,7 +236,7 @@ func (s *Service) sendTrackEvent(events []TrackEvent) error {
 		sdkEvents = append(sdkEvents, s.mp.NewEvent(e.Event, s.distinctID, props))
 	}
 
-	if err := s.mp.Track(context.Background(), sdkEvents); err != nil {
+	if err := s.mp.Track(ctx, sdkEvents); err != nil {
 		return fmt.Errorf("mixpanel track error: %w", err)
 	}
 	slog.Info("Sent event to Mixpanel", "event", sdkEvents[0].Name)
