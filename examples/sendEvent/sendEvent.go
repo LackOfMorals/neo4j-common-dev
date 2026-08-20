@@ -26,9 +26,7 @@ func main() {
 	cfg := config.New(
 		config.Field{Key: "token", Flag: "mixpanel-token", EnvVar: "MIXPANEL_TOKEN", Description: "Mixpanel project token"},
 		config.Field{Key: "endpoint", Flag: "mixpanel-endpoint", EnvVar: "MIXPANEL_ENDPOINT", Description: "Mixpanel API endpoint", Default: "https://api.mixpanel.com"},
-		config.Field{Key: "uri", Flag: "neo4j-uri", EnvVar: "NEO4J_URI", Description: "Neo4j connection URI", Default: "bolt://localhost:7687"},
-		config.Field{Key: "disableGeoTracking", Flag: "disable-geo-tracking", EnvVar: "MIXPANEL_DISABLE_GEO_TRACKING", Description: "opt every event out of Mixpanel's IP-based geolocation", Default: "false"},
-		config.Field{Key: "euResidency", Flag: "eu-residency", EnvVar: "MIXPANEL_EU_RESIDENCY", Description: "send events to Mixpanel's EU-residency endpoint", Default: "false"},
+		config.Field{Key: "euResidency", Flag: "eu-residency", EnvVar: "MIXPANEL_EU_RESIDENCY", Description: "send events to Mixpanel's EU-residency endpoint", Default: "true"},
 	)
 	values, err := cfg.Read(os.Args[1:])
 	if err != nil {
@@ -43,12 +41,14 @@ func main() {
 
 	token := values.String("token")
 	endpoint := values.String("endpoint")
-	uri := values.String("uri")
 
-	svc := analytics.New(token, endpoint, "sendEvent-example", uri,
-		analytics.WithCommonProperties(map[string]any{"app_version": "1.0.0"}), // optional
-		analytics.WithGeoIPTracking(!values.Bool("disableGeoTracking")),        // opt-out toggle
-		analytics.WithEuResidency(values.Bool("euResidency")),                  // overrides endpoint when true
+	svc := analytics.New(token, endpoint, "sendEvent-example",
+		// Every property here is ours to choose — Service only ever adds the
+		// machine ID automatically. Anything else an event needs (like
+		// app_version below, or a real user/session identifier) is ours to
+		// supply, either here as a common property or per-call to Emit.
+		analytics.WithCommonProperties(map[string]any{"app_version": "1.0.0"}),
+		analytics.WithEuResidency(values.Bool("euResidency")), // overrides endpoint when true
 	)
 	if token == "" {
 		svc.Disable() // safe to run unconfigured: no network call happens
@@ -64,7 +64,6 @@ func main() {
 		"token", token,
 		"configuredEndpoint", endpoint,
 		"enabled", svc.IsEnabled(),
-		"geoIPTracking", svc.IsGeoIPTrackingEnabled(),
 		"euResidency", values.Bool("euResidency"),
 	)
 }

@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -47,19 +46,15 @@ func (t *httpClientTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return t.client.Post(url, req.Header.Get("Content-Type"), req.Body)
 }
 
-// Service sends analytics events to Mixpanel, attaching privacy-safe
-// identifiers (a per-run distinct ID, a hashed machine ID, a redacted binary
-// path) and, optionally, caller-defined common properties to every event.
+// Service sends analytics events to Mixpanel. Every event carries a hashed
+// machine ID automatically; every other property — including any per-run
+// identifiers a caller wants — comes from WithCommonProperties or from the
+// properties passed to Emit.
 type Service struct {
 	distinctID       string
 	machineID        string
-	binaryPath       string
-	token            string
-	startupTime      int64
-	isAura           bool
 	mp               *mixpanel.ApiClient
 	disabled         atomic.Bool
-	geoIPDisabled    atomic.Bool
 	commonProperties any
 }
 
@@ -69,7 +64,6 @@ type serviceOptions struct {
 	httpClient       HTTPClient
 	httpTimeout      time.Duration
 	enabled          bool
-	geoIPEnabled     bool
 	euResidency      bool
 	commonProperties any
 }
@@ -94,16 +88,6 @@ func WithEnabled(enabled bool) Option {
 	return func(o *serviceOptions) { o.enabled = enabled }
 }
 
-// WithGeoIPTracking sets the Service's initial GeoIP tracking state.
-// Defaults to true, matching Mixpanel's own default (geolocate every event
-// from the request's source IP) and preserving continuity for apps that
-// were already sending events before this option existed. Pass false to
-// have every event explicitly opt out of Mixpanel's GeoIP lookup — see
-// DisableGeoIPTracking to flip this at runtime instead of at construction.
-func WithGeoIPTracking(enabled bool) Option {
-	return func(o *serviceOptions) { o.geoIPEnabled = enabled }
-}
-
 // WithCommonProperties registers properties attached to every event sent via
 // Emit, in addition to that call's own properties. Optional — a Service with
 // no common properties simply omits this layer.
@@ -122,13 +106,19 @@ func WithEuResidency(enabled bool) Option {
 // mixpanelEndpoint. appName seeds the HMAC salt used by GetMachineID, so each
 // consuming app must choose its own value — reusing an app's existing salt
 // preserves continuity of its already-collected device IDs, and picking a new
-// one starts a fresh series. uri is the Neo4j connection string used to
-// detect Aura databases for the isAura base property.
-func New(mixPanelToken, mixpanelEndpoint, appName, uri string, opts ...Option) *Service {
+// one starts a fresh series.
+//
+// Since this package instruments apps that run on machines rather than
+// individual end users, the machine ID also becomes Mixpanel's distinct_id
+// — so Mixpanel's own unique-user, retention and funnel views reflect
+// distinct machines rather than every process restart looking like a new
+// anonymous user. If GetMachineID fails, distinct_id falls back to a fresh
+// GetDistinctID UUID rather than leaving every affected install sharing an
+// empty distinct_id.
+func New(mixPanelToken, mixpanelEndpoint, appName string, opts ...Option) *Service {
 	options := serviceOptions{
-		httpTimeout:  defaultHTTPTimeout,
-		enabled:      true,
-		geoIPEnabled: true,
+		httpTimeout: defaultHTTPTimeout,
+		enabled:     true,
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -152,52 +142,33 @@ func New(mixPanelToken, mixpanelEndpoint, appName, uri string, opts ...Option) *
 		)
 	}
 
+	machineID := GetMachineID(appName)
+	distinctID := machineID
+	if distinctID == "" {
+		distinctID = GetDistinctID()
+	}
+
 	s := &Service{
-		distinctID:       GetDistinctID(),
-		machineID:        GetMachineID(appName),
-		binaryPath:       GetBinaryPath(),
-		token:            mixPanelToken,
-		startupTime:      time.Now().Unix(),
-		isAura:           isAura(uri),
+		distinctID:       distinctID,
+		machineID:        machineID,
 		mp:               mpClient,
 		commonProperties: options.commonProperties,
 	}
 	s.disabled.Store(!options.enabled)
-	s.geoIPDisabled.Store(!options.geoIPEnabled)
 	return s
-}
-
-// isAura returns true if uri looks like a Neo4j Aura connection string.
-// With multi-DB, this could be either databases.neo4j.io or instances.neo4j.io.
-var auraURIPattern = regexp.MustCompile(`(databases|instances)\.neo4j\.io\b`)
-
-func isAura(uri string) bool {
-	return auraURIPattern.MatchString(uri)
 }
 
 func (s *Service) Enable()         { s.disabled.Store(false) }
 func (s *Service) Disable()        { s.disabled.Store(true) }
 func (s *Service) IsEnabled() bool { return !s.disabled.Load() }
 
-// EnableGeoIPTracking lets Mixpanel geolocate future events from the
-// request's source IP again (Mixpanel's own default).
-func (s *Service) EnableGeoIPTracking() { s.geoIPDisabled.Store(false) }
-
-// DisableGeoIPTracking makes every future event explicitly opt out of
-// Mixpanel's GeoIP lookup, e.g. in response to a runtime consent change.
-func (s *Service) DisableGeoIPTracking() { s.geoIPDisabled.Store(true) }
-
-// IsGeoIPTrackingEnabled reports whether events currently let Mixpanel
-// geolocate them from the request's source IP.
-func (s *Service) IsGeoIPTrackingEnabled() bool { return !s.geoIPDisabled.Load() }
-
 // EmitEvent sends event exactly as given, with no property merging. Use Emit
-// for the common case of sending a named event with base/common/specific
-// properties merged automatically. ctx governs the outbound Mixpanel
-// request — cancelling it (e.g. on caller shutdown) aborts the send instead
-// of blocking for the full HTTP timeout; it does not affect the swallow-and-
-// log error handling below, which is deliberate so a telemetry failure never
-// breaks the caller's own control flow.
+// for the common case of sending a named event with the machine ID and
+// common/specific properties merged automatically. ctx governs the outbound
+// Mixpanel request — cancelling it (e.g. on caller shutdown) aborts the send
+// instead of blocking for the full HTTP timeout; it does not affect the
+// swallow-and-log error handling below, which is deliberate so a telemetry
+// failure never breaks the caller's own control flow.
 func (s *Service) EmitEvent(ctx context.Context, event TrackEvent) {
 	if s.disabled.Load() {
 		return
@@ -209,11 +180,10 @@ func (s *Service) EmitEvent(ctx context.Context, event TrackEvent) {
 }
 
 // Emit sends eventName with the merge of three property layers: the
-// Service's own base properties (distinct id, machine id, os/arch, binary
-// path, uptime, insert id, token, aura flag), the common properties
-// registered via WithCommonProperties (if any), and properties, specific to
-// this one event. On key collision, properties wins over common properties,
-// and base properties always win over both. See EmitEvent for how ctx is used.
+// Service's machine ID, the common properties registered via
+// WithCommonProperties (if any), and properties, specific to this one
+// event. On key collision, properties wins over common properties, and the
+// machine ID always wins over both. See EmitEvent for how ctx is used.
 func (s *Service) Emit(ctx context.Context, eventName string, properties any) {
 	if s.disabled.Load() {
 		return
@@ -246,7 +216,8 @@ func (s *Service) sendTrackEvent(ctx context.Context, events []TrackEvent) error
 // GetBinaryPath returns the absolute path of the running binary via os.Executable.
 // Symlinks are resolved so the real on-disk path is reported.
 // Any occurrence of the user's home directory or username is redacted.
-// Returns an empty string on failure.
+// Returns an empty string on failure. Not called automatically by Service —
+// include it in WithCommonProperties or an Emit call if a caller wants it.
 func GetBinaryPath() string {
 	path, err := os.Executable()
 	if err != nil {
@@ -307,7 +278,9 @@ func GetMachineID(appName string) string {
 	return id
 }
 
-// GetDistinctID returns a fresh UUID for use as a per-run distinct ID.
+// GetDistinctID returns a fresh, per-run UUID. New uses this only as a
+// fallback distinct_id when GetMachineID fails; it's exported in case a
+// caller wants a per-run identifier of its own for some other purpose.
 func GetDistinctID() string {
 	id, err := uuid.NewV6()
 	if err != nil {

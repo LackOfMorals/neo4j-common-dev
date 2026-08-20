@@ -45,7 +45,7 @@ func decodeTrackedEvents(t *testing.T, body io.Reader) []analytics.TrackEvent {
 func newTestService(t *testing.T, client analytics.HTTPClient, opts ...analytics.Option) *analytics.Service {
 	t.Helper()
 	allOpts := append([]analytics.Option{analytics.WithHTTPClient(client)}, opts...)
-	return analytics.New("test-token", "http://localhost", "analytics-test", "bolt://localhost:7687", allOpts...)
+	return analytics.New("test-token", "http://localhost", "analytics-test", allOpts...)
 }
 
 func TestEnableDisable(t *testing.T) {
@@ -86,7 +86,7 @@ func TestEmitEvent(t *testing.T) {
 		svc.EmitEvent(context.Background(), analytics.TrackEvent{Event: "test_event"})
 	})
 
-	t.Run("sends the given event as-is when enabled", func(t *testing.T) {
+	t.Run("sends the given event as-is when enabled, with no properties added", func(t *testing.T) {
 		var called bool
 		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
 			called = true
@@ -103,6 +103,12 @@ func TestEmitEvent(t *testing.T) {
 			}
 			if props["key"] != "value" {
 				t.Errorf("unexpected properties[key]: got %v, want value", props["key"])
+			}
+			// EmitEvent does no merging — the SDK still adds its own token/
+			// distinct_id/mp_lib bookkeeping, but we shouldn't have added
+			// machine_id (that's only added by Emit).
+			if _, exists := props["machine_id"]; exists {
+				t.Errorf("expected no machine_id property from EmitEvent, got %v", props["machine_id"])
 			}
 			return okResponse(), nil
 		})
@@ -134,7 +140,7 @@ func TestEmitEvent(t *testing.T) {
 					gotURL = url
 					return okResponse(), nil
 				})
-				svc := analytics.New("test-token", tc.mixpanelEndpoint, "analytics-test", "bolt://localhost:7687",
+				svc := analytics.New("test-token", tc.mixpanelEndpoint, "analytics-test",
 					analytics.WithHTTPClient(client))
 				svc.EmitEvent(context.Background(), analytics.TrackEvent{Event: "test_event"})
 				if gotURL != tc.expectedURL {
@@ -146,7 +152,7 @@ func TestEmitEvent(t *testing.T) {
 }
 
 func TestEmit(t *testing.T) {
-	t.Run("merges base and specific properties when no common properties are registered", func(t *testing.T) {
+	t.Run("merges the machine ID with specific properties when no common properties are registered", func(t *testing.T) {
 		var props map[string]any
 		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
 			events := decodeTrackedEvents(t, body)
@@ -159,12 +165,12 @@ func TestEmit(t *testing.T) {
 		if props["feature"] != "x" {
 			t.Errorf("expected specific property to be present, got %v", props["feature"])
 		}
-		if props["token"] != "test-token" {
-			t.Errorf("expected base property token to be present, got %v", props["token"])
+		if _, exists := props["machine_id"]; !exists {
+			t.Errorf("expected machine_id to be present")
 		}
 	})
 
-	t.Run("merges base, common and specific properties, specific wins over common", func(t *testing.T) {
+	t.Run("merges machine ID, common and specific properties, specific wins over common", func(t *testing.T) {
 		var props map[string]any
 		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
 			events := decodeTrackedEvents(t, body)
@@ -184,12 +190,26 @@ func TestEmit(t *testing.T) {
 		if props["shared_key"] != "specific" {
 			t.Errorf("expected specific property to win over common on collision, got %v", props["shared_key"])
 		}
-		if props["token"] != "test-token" {
-			t.Errorf("expected base property token to be present, got %v", props["token"])
+	})
+
+	t.Run("caller-supplied properties do not require any package defaults to be present", func(t *testing.T) {
+		var props map[string]any
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			events := decodeTrackedEvents(t, body)
+			props, _ = events[0].Properties.(map[string]any)
+			return okResponse(), nil
+		})
+		svc := newTestService(t, client)
+		svc.Emit(context.Background(), "APP_STARTED", nil)
+
+		for _, removed := range []string{"time", "uptime", "$os", "os_arch", "isAura", "$insert_id", "binary_path"} {
+			if _, exists := props[removed]; exists {
+				t.Errorf("expected %q to no longer be a package default, but it was present: %v", removed, props[removed])
+			}
 		}
 	})
 
-	t.Run("base properties win over common and specific on collision", func(t *testing.T) {
+	t.Run("machine ID always wins over common and specific properties on collision", func(t *testing.T) {
 		var props map[string]any
 		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
 			events := decodeTrackedEvents(t, body)
@@ -197,11 +217,11 @@ func TestEmit(t *testing.T) {
 			return okResponse(), nil
 		})
 		svc := newTestService(t, client,
-			analytics.WithCommonProperties(map[string]any{"token": "not-the-real-token"}))
-		svc.Emit(context.Background(), "APP_STARTED", map[string]any{"token": "also-not-the-real-token"})
+			analytics.WithCommonProperties(map[string]any{"machine_id": "bogus-common"}))
+		svc.Emit(context.Background(), "APP_STARTED", map[string]any{"machine_id": "bogus-specific"})
 
-		if props["token"] != "test-token" {
-			t.Errorf("expected base token to win over common/specific, got %v", props["token"])
+		if props["machine_id"] == "bogus-common" || props["machine_id"] == "bogus-specific" {
+			t.Errorf("expected the real machine_id to win over caller-supplied values, got %v", props["machine_id"])
 		}
 	})
 
@@ -215,35 +235,30 @@ func TestEmit(t *testing.T) {
 	})
 }
 
-func TestAuraDetection(t *testing.T) {
-	testCases := []struct {
-		name string
-		uri  string
-		want bool
-	}{
-		{"plain bolt URI", "bolt://localhost:7687", false},
-		{"databases.neo4j.io", "neo4j+s://mydb.databases.neo4j.io", true},
-		{"instances.neo4j.io", "neo4j+s://mydb.instances.neo4j.io", true},
-		{"unrelated URI", "bolt://example.com:7687", false},
-	}
+func TestDistinctID(t *testing.T) {
+	t.Run("the machine ID is used as Mixpanel's distinct_id when available", func(t *testing.T) {
+		// machineid.ProtectedID can fail in some sandboxed CI environments
+		// (see TestIdentifierHelpers) — skip rather than fail in that case,
+		// since the fallback-to-GetDistinctID path this would otherwise be
+		// exercising isn't what this test is about.
+		machineID := analytics.GetMachineID("analytics-test")
+		if machineID == "" {
+			t.Skip("GetMachineID unavailable in this environment")
+		}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var props map[string]any
-			client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
-				events := decodeTrackedEvents(t, body)
-				props, _ = events[0].Properties.(map[string]any)
-				return okResponse(), nil
-			})
-			svc := analytics.New("test-token", "http://localhost", "analytics-test", tc.uri,
-				analytics.WithHTTPClient(client))
-			svc.Emit(context.Background(), "APP_STARTED", nil)
-
-			if props["isAura"] != tc.want {
-				t.Errorf("unexpected isAura for %q: got %v, want %v", tc.uri, props["isAura"], tc.want)
-			}
+		var props map[string]any
+		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
+			events := decodeTrackedEvents(t, body)
+			props, _ = events[0].Properties.(map[string]any)
+			return okResponse(), nil
 		})
-	}
+		svc := newTestService(t, client)
+		svc.EmitEvent(context.Background(), analytics.TrackEvent{Event: "test_event"})
+
+		if props["distinct_id"] != machineID {
+			t.Errorf("expected distinct_id to be the machine ID %q, got %v", machineID, props["distinct_id"])
+		}
+	})
 }
 
 func TestEuResidency(t *testing.T) {
@@ -253,7 +268,7 @@ func TestEuResidency(t *testing.T) {
 			gotURL = url
 			return okResponse(), nil
 		})
-		svc := analytics.New("test-token", "http://localhost", "analytics-test", "bolt://localhost:7687",
+		svc := analytics.New("test-token", "http://localhost", "analytics-test",
 			analytics.WithHTTPClient(client))
 		svc.EmitEvent(context.Background(), analytics.TrackEvent{Event: "test_event"})
 
@@ -268,74 +283,12 @@ func TestEuResidency(t *testing.T) {
 			gotURL = url
 			return okResponse(), nil
 		})
-		svc := analytics.New("test-token", "http://localhost", "analytics-test", "bolt://localhost:7687",
+		svc := analytics.New("test-token", "http://localhost", "analytics-test",
 			analytics.WithHTTPClient(client), analytics.WithEuResidency(true))
 		svc.EmitEvent(context.Background(), analytics.TrackEvent{Event: "test_event"})
 
 		if gotURL != "https://api-eu.mixpanel.com/track?verbose=1" {
 			t.Errorf("unexpected URL: got %s, want %s", gotURL, "https://api-eu.mixpanel.com/track?verbose=1")
-		}
-	})
-}
-
-func TestGeoIPTracking(t *testing.T) {
-	emit := func(t *testing.T, opts ...analytics.Option) map[string]any {
-		t.Helper()
-		var props map[string]any
-		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
-			events := decodeTrackedEvents(t, body)
-			props, _ = events[0].Properties.(map[string]any)
-			return okResponse(), nil
-		})
-		svc := newTestService(t, client, opts...)
-		svc.Emit(context.Background(), "APP_STARTED", nil)
-		return props
-	}
-
-	t.Run("enabled by default: no ip property is sent, letting Mixpanel geolocate from the request", func(t *testing.T) {
-		props := emit(t)
-		if !newTestService(t, nil).IsGeoIPTrackingEnabled() {
-			t.Errorf("expected GeoIP tracking to be enabled by default")
-		}
-		if _, exists := props["ip"]; exists {
-			t.Errorf("expected no ip property when enabled, got %v", props["ip"])
-		}
-	})
-
-	t.Run("WithGeoIPTracking(false) sends ip=0 to opt every event out", func(t *testing.T) {
-		props := emit(t, analytics.WithGeoIPTracking(false))
-		if props["ip"] != "0" {
-			t.Errorf("expected ip property to be \"0\", got %v", props["ip"])
-		}
-	})
-
-	t.Run("DisableGeoIPTracking flips an existing Service at runtime", func(t *testing.T) {
-		var props map[string]any
-		client := stubHTTPClient(func(url, contentType string, body io.Reader) (*http.Response, error) {
-			events := decodeTrackedEvents(t, body)
-			props, _ = events[0].Properties.(map[string]any)
-			return okResponse(), nil
-		})
-		svc := newTestService(t, client)
-
-		svc.Emit(context.Background(), "BEFORE_DISABLE", nil)
-		if _, exists := props["ip"]; exists {
-			t.Errorf("expected no ip property before DisableGeoIPTracking, got %v", props["ip"])
-		}
-
-		svc.DisableGeoIPTracking()
-		if svc.IsGeoIPTrackingEnabled() {
-			t.Errorf("expected IsGeoIPTrackingEnabled to report false after DisableGeoIPTracking")
-		}
-		svc.Emit(context.Background(), "AFTER_DISABLE", nil)
-		if props["ip"] != "0" {
-			t.Errorf("expected ip property to be \"0\" after DisableGeoIPTracking, got %v", props["ip"])
-		}
-
-		svc.EnableGeoIPTracking()
-		svc.Emit(context.Background(), "AFTER_ENABLE", nil)
-		if _, exists := props["ip"]; exists {
-			t.Errorf("expected no ip property after EnableGeoIPTracking, got %v", props["ip"])
 		}
 	})
 }
