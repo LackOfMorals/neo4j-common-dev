@@ -95,24 +95,29 @@ func New(baseURL string, timeout time.Duration, opts ...Option) *Service {
 // are merged over any WithDefaultHeaders values, taking precedence on a
 // shared header name. body is the request body, and may be nil/empty for
 // methods like GET that don't send one.
-func (s *Service) Do(ctx context.Context, method, endpoint string, headers map[string]string, body []byte) (*http.Response, []byte, error) {
-	url := s.baseURL + endpoint
-
+func newRequest(ctx context.Context, baseURL, method, endpoint string, headers map[string]string, body []byte, defaultHeaders map[string]string) (*http.Request, error) {
+	url := baseURL + endpoint
 	var reqBody io.Reader
 	if len(body) > 0 {
 		reqBody = bytes.NewReader(body)
 	}
-
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-
-	for k, v := range s.defaultHeaders {
+	for k, v := range defaultHeaders {
 		req.Header.Set(k, v)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+	return req, nil
+}
+
+func (s *Service) Do(ctx context.Context, method, endpoint string, headers map[string]string, body []byte) (*http.Response, []byte, error) {
+	req, err := newRequest(ctx, s.baseURL, method, endpoint, headers, body, s.defaultHeaders)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	resp, err := s.client.Do(req)
@@ -130,4 +135,17 @@ func (s *Service) Do(ctx context.Context, method, endpoint string, headers map[s
 		return resp, nil, fmt.Errorf("response body exceeds maximum size of %d bytes", s.maxResponseSize)
 	}
 	return resp, data, nil
+}
+
+// DoStreaming behaves like Do but returns the live, unbuffered response for
+// the caller to read and close, instead of reading the whole body up front.
+// Do remains the right choice for everything else, since it also enforces
+// MaxResponseSize; DoStreaming enforces no such cap — callers streaming an
+// unbounded body must bound it themselves.
+func (s *Service) DoStreaming(ctx context.Context, method, endpoint string, headers map[string]string, body []byte) (*http.Response, error) {
+	req, err := newRequest(ctx, s.baseURL, method, endpoint, headers, body, s.defaultHeaders)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(req)
 }

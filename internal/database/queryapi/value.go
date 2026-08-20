@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"time"
 )
 
 type typedValue struct {
@@ -61,6 +62,16 @@ func DecodeValue(raw json.RawMessage) (any, error) {
 		return decodeDuration(tv.Value)
 	case "Vector":
 		return decodeVector(tv.Value)
+	case "Date":
+		return decodeDate(tv.Value)
+	case "LocalTime":
+		return decodeLocalTime(tv.Value)
+	case "Time":
+		return decodeTime(tv.Value)
+	case "LocalDateTime":
+		return decodeLocalDateTime(tv.Value)
+	case "DateTime":
+		return decodeDateTime(tv.Value)
 	default:
 		return RawTypedValue{Type: tv.Type, Value: tv.Value}, nil
 	}
@@ -190,6 +201,70 @@ func decodeDuration(raw json.RawMessage) (Duration, error) {
 	}, nil
 }
 
+func decodeDate(raw json.RawMessage) (Date, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return Date{}, err }
+	// YYYY-MM-DD
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil { return Date{}, err }
+	return Date{Year: t.Year(), Month: int(t.Month()), Day: t.Day()}, nil
+}
+
+func decodeLocalTime(raw json.RawMessage) (LocalTime, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return LocalTime{}, err }
+	// HH:MM:SS[.nnnnnnnnn]
+	t, err := time.Parse("15:04:05.999999999", s)
+	if err != nil {
+		t, err = time.Parse("15:04:05", s)
+		if err != nil { return LocalTime{}, err }
+	}
+	return LocalTime{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second(), Nano: t.Nanosecond()}, nil
+}
+
+func decodeTime(raw json.RawMessage) (Time, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return Time{}, err }
+	// Parse with offset
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return Time{}, err
+	}
+	lt := LocalTime{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second(), Nano: t.Nanosecond()}
+	return Time{LocalTime: lt, Offset: t.Format("-07:00")}, nil
+}
+
+func decodeLocalDateTime(raw json.RawMessage) (LocalDateTime, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return LocalDateTime{}, err }
+	// 2006-01-02T15:04:05.999999999
+	t, err := time.Parse("2006-01-02T15:04:05.999999999", s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05", s)
+		if err != nil { return LocalDateTime{}, err }
+	}
+	date := Date{Year: t.Year(), Month: int(t.Month()), Day: t.Day()}
+	lt := LocalTime{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second(), Nano: t.Nanosecond()}
+	return LocalDateTime{Date: date, LocalTime: lt}, nil
+}
+
+func decodeDateTime(raw json.RawMessage) (DateTime, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil { return DateTime{}, err }
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil { return DateTime{}, err }
+	date := Date{Year: t.Year(), Month: int(t.Month()), Day: t.Day()}
+	lt := LocalTime{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second(), Nano: t.Nanosecond()}
+	ldt := LocalDateTime{Date: date, LocalTime: lt}
+	return DateTime{LocalDateTime: ldt, Offset: t.Format("-07:00"), Zone: t.Location().String()}, nil
+}
+
+func decodeVector(raw json.RawMessage) (Vector, error) {
+	var v VectorWire
+	if err := json.Unmarshal(raw, &v); err != nil { return Vector{}, fmt.Errorf("decode Vector: %w", err) }
+	return Vector{Values: v.Values}, nil
+}
+
 func atoi0(s string) int64 {
 	if s == "" { return 0 }
 	n, _ := strconv.ParseInt(s, 10, 64)
@@ -198,7 +273,6 @@ func atoi0(s string) int64 {
 
 func parseFractionNanos(s string) int {
 	if s == "" { return 0 }
-	// pad/truncate to 9 digits
 	if len(s) > 9 { s = s[:9] }
 	for len(s) < 9 { s += "0" }
 	n, _ := strconv.Atoi(s)
@@ -234,5 +308,13 @@ type Duration struct {
 	Months, Days, Seconds int64
 	Nanos int
 }
-type Vector struct{}
+type Vector struct {
+	Values []float64
+}
 type Unsupported struct{}
+
+type Date struct{ Year, Month, Day int }
+type LocalTime struct{ Hour, Minute, Second, Nano int }
+type Time struct{ LocalTime LocalTime; Offset string }
+type LocalDateTime struct{ Date Date; LocalTime LocalTime }
+type DateTime struct{ LocalDateTime LocalDateTime; Offset string; Zone string }
