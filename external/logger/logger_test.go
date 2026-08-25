@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LackOfMorals/neo4j-common/external/logger"
+	"github.com/LackOfMorals/neo4jPackages/external/logger"
 )
 
 func decodeJSONLine(t *testing.T, buf *bytes.Buffer) map[string]any {

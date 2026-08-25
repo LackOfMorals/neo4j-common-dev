@@ -122,7 +122,7 @@ func encodePoint(p Point) (json.RawMessage, error) {
 	// Simplified WKT encoding
 	z := ""
 	if p.Z != nil { z = fmt.Sprintf(" %g", *p.Z) }
-	wkt := fmt.Sprintf("SRID=%d;POINT%s(%g %g%s)", p.SRID, "", p.X, p.Y)
+	wkt := fmt.Sprintf("SRID=%d;POINT(%g %g%s)", p.SRID, p.X, p.Y, z)
 	b, _ := json.Marshal(wkt)
 	return json.RawMessage(fmt.Sprintf(`{"$type":"Point","_value":%s}`, b)), nil
 }

@@ -6,7 +6,7 @@ package config_test
 import (
 	"testing"
 
-	"github.com/LackOfMorals/neo4j-common/external/config"
+	"github.com/LackOfMorals/neo4jPackages/external/config"
 )
 
 func TestServiceRead(t *testing.T) {

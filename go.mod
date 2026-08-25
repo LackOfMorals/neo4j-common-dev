@@ -1,4 +1,4 @@
-module github.com/LackOfMorals/neo4j-common
+module github.com/LackOfMorals/neo4jPackages
 
 go 1.25.0
 
@@ -8,4 +8,7 @@ require (
 	github.com/mixpanel/mixpanel-go v1.2.1
 )
 
-require golang.org/x/sys v0.47.0 // indirect
+require (
+	github.com/neo4j/neo4j-go-driver/v6 v6.2.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+)

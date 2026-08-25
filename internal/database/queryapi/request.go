@@ -1,10 +1,10 @@
 package queryapi
 
-type ExecuteRequest struct {
-	Statements []Statement `json:"statements"`
-}
+import "encoding/json"
 
-type Statement struct {
-	Statement string                 `json:"statement"`
-	Parameters map[string]any         `json:"parameters,omitempty"`
+type ExecuteRequest struct {
+	Statement  string                 `json:"statement"`
+	Parameters map[string]json.RawMessage `json:"parameters,omitempty"`
+	TxMetadata map[string]any         `json:"txMetadata,omitempty"`
+	MaxExecutionTime int          `json:"maxExecutionTime,omitempty"`
 }

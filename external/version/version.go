@@ -10,7 +10,7 @@ var ClientVersion string = fallback
 
 func init() {
 	if info, ok := debug.ReadBuildInfo(); ok {
-		if v := resolveVersion(info, "github.com/LackOfMorals/neo4j-common"); v != "" {
+		if v := resolveVersion(info, "github.com/LackOfMorals/neo4jPackages"); v != "" {
 			ClientVersion = v
 		}
 	}

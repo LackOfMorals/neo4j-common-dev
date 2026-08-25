@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"time"
 )
 
@@ -21,6 +22,7 @@ const (
 type QueryType string
 
 const (
+	QueryTypeUnknown QueryType = ""
 	QueryTypeRead QueryType = "r"
 	QueryTypeWrite QueryType = "w"
 	QueryTypeReadWrite QueryType = "rw"
@@ -39,7 +41,8 @@ type Summary struct {
 	ResultAvailableAfter time.Duration
 	ResultConsumedAfter time.Duration
 	Database string
-}
+	Bookmarks []string
+} 
 
 type Node struct {
 	ElementID string
@@ -71,9 +74,40 @@ type Duration struct {
 	Nanos int
 }
 
+type Vector struct {
+	Values []float64
+}
+
 type Record struct {
 	keys []string
 	values []any
+}
+
+func (r Record) Keys() []string { return r.keys }
+func (r Record) Values() []any { return r.values }
+func (r Record) Get(key string) (any, bool) {
+	for i, k := range r.keys {
+		if k == key {
+			return r.values[i], true
+		}
+	}
+	return nil, false
+}
+func (r Record) At(i int) (any, bool) {
+	if i < 0 || i >= len(r.values) { return nil, false }
+	return r.values[i], true
+}
+func (r Record) GetNode(key string) (Node, bool) {
+	v, ok := r.Get(key)
+	if !ok { return Node{}, false }
+	n, ok := v.(Node)
+	return n, ok
+}
+func (r Record) GetRelationship(key string) (Relationship, bool) {
+	v, ok := r.Get(key)
+	if !ok { return Relationship{}, false }
+	rr, ok := v.(Relationship)
+	return rr, ok
 }
 
 type Result struct {
@@ -84,7 +118,50 @@ type Result struct {
 
 type StreamResult struct {
 	keys []string
-	// implementation details hidden
+	records []Record
+	summary Summary
+	closeFn func() error
 }
 
 func (r *StreamResult) Keys() []string { return r.keys }
+
+func (r *StreamResult) Records() func(yield func(Record, error) bool) {
+	return func(yield func(Record, error) bool) {
+		for _, rec := range r.records {
+			if !yield(rec, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (r *StreamResult) Summary() Summary { return r.summary }
+
+func (r *StreamResult) Close() error {
+	if r.closeFn != nil {
+		return r.closeFn()
+	}
+	return nil
+}
+
+type Tx struct {
+	id string
+	backend interface{ txRun(ctx context.Context, stmt string, params map[string]any) (*Result, error); txCommit(ctx context.Context) (*CommitResult, error); txRollback(ctx context.Context) error }
+}
+
+type CommitResult struct {
+	Bookmarks []string
+	Summary Summary
+}
+
+func (t *Tx) Run(ctx context.Context, cypher string, params map[string]any) (*Result, error) {
+	return t.backend.txRun(ctx, cypher, params)
+}
+
+func (t *Tx) Commit(ctx context.Context) (*CommitResult, error) {
+	return t.backend.txCommit(ctx)
+}
+
+func (t *Tx) Rollback(ctx context.Context) error {
+	return t.backend.txRollback(ctx)
+}

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LackOfMorals/neo4j-common/external/analytics"
+	"github.com/LackOfMorals/neo4jPackages/external/analytics"
 )
 
 // stubHTTPClient implements analytics.HTTPClient with a plain function,

@@ -1,10 +1,13 @@
 package queryapi
 
-import "bufio"
+import (
+	"bufio"
+	"encoding/json"
+)
 
 type StreamEvent struct {
-	Event string `json:"$event"`
-	Body  []byte `json:"_body"`
+	Event string          `json:"$event"`
+	Body  json.RawMessage `json:"_body"`
 }
 
 func NewStreamScanner(r *bufio.Reader) *bufio.Scanner {

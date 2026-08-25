@@ -164,7 +164,44 @@ func decodeRelationship(raw json.RawMessage) (Relationship, error) {
 }
 
 func decodePath(raw json.RawMessage) (Path, error) {
-	return Path{}, nil
+	// Try the documented shape: {_nodes:[...],_relationships:[...]}
+	var w struct {
+		Nodes []json.RawMessage `json:"_nodes"`
+		Relationships []json.RawMessage `json:"_relationships"`
+	}
+	if err := json.Unmarshal(raw, &w); err != nil {
+		// Fallback: some servers emit a flat list alternating Node/Relationship
+		var list []json.RawMessage
+		if err2 := json.Unmarshal(raw, &list); err2 == nil {
+			// Attempt to interpret as alternating
+			p := Path{}
+			for i, v := range list {
+				val, err := DecodeValue(v)
+				if err != nil { continue }
+				switch x := val.(type) {
+				case Node:
+					p.Nodes = append(p.Nodes, x)
+				case Relationship:
+					p.Relationships = append(p.Relationships, x)
+				}
+				_ = i
+			}
+			return p, nil
+		}
+		return Path{}, fmt.Errorf("decode Path: %w", err)
+	}
+	p := Path{}
+	for _, nRaw := range w.Nodes {
+		n, err := DecodeValue(nRaw)
+		if err != nil { continue }
+		if node, ok := n.(Node); ok { p.Nodes = append(p.Nodes, node) }
+	}
+	for _, rRaw := range w.Relationships {
+		r, err := DecodeValue(rRaw)
+		if err != nil { continue }
+		if rel, ok := r.(Relationship); ok { p.Relationships = append(p.Relationships, rel) }
+	}
+	return p, nil
 }
 
 func decodePoint(raw json.RawMessage) (Point, error) {
@@ -197,7 +234,7 @@ func decodeDuration(raw json.RawMessage) (Duration, error) {
 		Months: sign * (years*12 + months),
 		Days: sign * days,
 		Seconds: sign * (hours*3600 + minutes*60 + seconds),
-		Nanos: sign * nanos,
+		Nanos: int(sign * int64(nanos)),
 	}, nil
 }
 
@@ -259,12 +296,6 @@ func decodeDateTime(raw json.RawMessage) (DateTime, error) {
 	return DateTime{LocalDateTime: ldt, Offset: t.Format("-07:00"), Zone: t.Location().String()}, nil
 }
 
-func decodeVector(raw json.RawMessage) (Vector, error) {
-	var v VectorWire
-	if err := json.Unmarshal(raw, &v); err != nil { return Vector{}, fmt.Errorf("decode Vector: %w", err) }
-	return Vector{Values: v.Values}, nil
-}
-
 func atoi0(s string) int64 {
 	if s == "" { return 0 }
 	n, _ := strconv.ParseInt(s, 10, 64)
@@ -298,7 +329,10 @@ type Relationship struct {
 	Properties     map[string]any
 }
 
-type Path struct{}
+type Path struct {
+	Nodes []Node
+	Relationships []Relationship
+}
 type Point struct {
 	SRID int
 	X, Y float64

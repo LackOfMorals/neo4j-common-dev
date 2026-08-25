@@ -8,6 +8,8 @@ github.com/jarcoal/httpmock v1.3.1 h1:iUx3whfZWVf3jT01hQTO/Eo5sAYtB2/rqaUuOtpInw
 github.com/jarcoal/httpmock v1.3.1/go.mod h1:3yb8rc4BI7TCBhFY8ng0gjuLKJNquuDNiPaZjnENuYg=
 github.com/mixpanel/mixpanel-go v1.2.1 h1:iykbHKomTJjVoWU95Vt1sjZy4HLt8UOYacMEEEMFBok=
 github.com/mixpanel/mixpanel-go v1.2.1/go.mod h1:mPGaNhBoZMJuLu8k7Y1KhU5n8Vw13rxQZZjHj+b9RLk=
+github.com/neo4j/neo4j-go-driver/v6 v6.2.0 h1:5gxdBkCAY+jD/Tv6goqctLk3AdaVFU8MQU4t3n04SsU=
+github.com/neo4j/neo4j-go-driver/v6 v6.2.0/go.mod h1:hzSTfNfM31p1uRSzL1F/BAYOgaiTarE6OAQBajfsm+I=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
