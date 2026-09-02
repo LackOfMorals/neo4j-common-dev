@@ -28,15 +28,15 @@ Go version: `1.25.0`
 ## Testing
 
 * Real server available for integration tests: `http://localhost:7474`, user `neo4j`, password `password`. Bolt on `bolt://neo4j:password@localhost:7687`.
-* Integration smoke files in repo root:
-  * `integration_test.go` – buffered, streaming, explicit mode, Tx lifecycle, Vector decode
-  * `smoke_main.go`
-  * `test_explicit_stream.go`
-  * `verify_wire.go`
-  * `test_db_override.go`
+* Integration smoke examples (each a small `package main` demo under `examples/`, one per directory):
+  * `examples/smoke-buffered/` – buffered, streaming, explicit mode, Tx lifecycle, Vector decode
+  * `examples/smoke-explicit-stream/` – explicit-mode streaming + post-commit verification
+  * `examples/verify-wire/` – Path/Relationship wire-shape checks
+  * `examples/db-override/` – per-call `WithDatabaseOverride`
 * Run examples:
   ```bash
-  go run examples/database/main.go
+  go run examples/database        # end-to-end example, both backends
+  go run examples/smoke-buffered  # Query API smoke
   ```
 * Build only packages:
   ```bash
