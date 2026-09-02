@@ -22,56 +22,56 @@ const (
 type QueryType string
 
 const (
-	QueryTypeUnknown QueryType = ""
-	QueryTypeRead QueryType = "r"
-	QueryTypeWrite QueryType = "w"
+	QueryTypeUnknown   QueryType = ""
+	QueryTypeRead      QueryType = "r"
+	QueryTypeWrite     QueryType = "w"
 	QueryTypeReadWrite QueryType = "rw"
-	QueryTypeSchema QueryType = "s"
+	QueryTypeSchema    QueryType = "s"
 )
 
 type Counters struct {
-	NodesCreated, NodesDeleted int
+	NodesCreated, NodesDeleted                 int
 	RelationshipsCreated, RelationshipsDeleted int
-	PropertiesSet int
+	PropertiesSet                              int
 }
 
 type Summary struct {
-	QueryType QueryType
-	Counters Counters
+	QueryType            QueryType
+	Counters             Counters
 	ResultAvailableAfter time.Duration
-	ResultConsumedAfter time.Duration
-	Database string
-	Bookmarks []string
-} 
+	ResultConsumedAfter  time.Duration
+	Database             string
+	Bookmarks            []string
+}
 
 type Node struct {
-	ElementID string
-	Labels []string
+	ElementID  string
+	Labels     []string
 	Properties map[string]any
 }
 
 type Relationship struct {
-	ElementID string
-	Type string
+	ElementID      string
+	Type           string
 	StartElementID string
-	EndElementID string
-	Properties map[string]any
+	EndElementID   string
+	Properties     map[string]any
 }
 
 type Path struct {
-	Nodes []Node
+	Nodes         []Node
 	Relationships []Relationship
 }
 
 type Point struct {
 	SRID int
 	X, Y float64
-	Z *float64
+	Z    *float64
 }
 
 type Duration struct {
 	Months, Days, Seconds int64
-	Nanos int
+	Nanos                 int
 }
 
 type Vector struct {
@@ -79,12 +79,12 @@ type Vector struct {
 }
 
 type Record struct {
-	keys []string
+	keys   []string
 	values []any
 }
 
 func (r Record) Keys() []string { return r.keys }
-func (r Record) Values() []any { return r.values }
+func (r Record) Values() []any  { return r.values }
 func (r Record) Get(key string) (any, bool) {
 	for i, k := range r.keys {
 		if k == key {
@@ -94,30 +94,36 @@ func (r Record) Get(key string) (any, bool) {
 	return nil, false
 }
 func (r Record) At(i int) (any, bool) {
-	if i < 0 || i >= len(r.values) { return nil, false }
+	if i < 0 || i >= len(r.values) {
+		return nil, false
+	}
 	return r.values[i], true
 }
 func (r Record) GetNode(key string) (Node, bool) {
 	v, ok := r.Get(key)
-	if !ok { return Node{}, false }
+	if !ok {
+		return Node{}, false
+	}
 	n, ok := v.(Node)
 	return n, ok
 }
 func (r Record) GetRelationship(key string) (Relationship, bool) {
 	v, ok := r.Get(key)
-	if !ok { return Relationship{}, false }
+	if !ok {
+		return Relationship{}, false
+	}
 	rr, ok := v.(Relationship)
 	return rr, ok
 }
 
 type Result struct {
-	Keys []string
+	Keys    []string
 	Records []Record
 	Summary Summary
 }
 
 type StreamResult struct {
-	keys []string
+	keys    []string
 	records []Record
 	summary Summary
 	closeFn func() error
@@ -145,13 +151,17 @@ func (r *StreamResult) Close() error {
 }
 
 type Tx struct {
-	id string
-	backend interface{ txRun(ctx context.Context, stmt string, params map[string]any) (*Result, error); txCommit(ctx context.Context) (*CommitResult, error); txRollback(ctx context.Context) error }
+	id      string
+	backend interface {
+		txRun(ctx context.Context, stmt string, params map[string]any) (*Result, error)
+		txCommit(ctx context.Context) (*CommitResult, error)
+		txRollback(ctx context.Context) error
+	}
 }
 
 type CommitResult struct {
 	Bookmarks []string
-	Summary Summary
+	Summary   Summary
 }
 
 func (t *Tx) Run(ctx context.Context, cypher string, params map[string]any) (*Result, error) {

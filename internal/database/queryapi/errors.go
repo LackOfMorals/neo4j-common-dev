@@ -2,7 +2,7 @@ package queryapi
 
 type TransportError struct {
 	StatusCode int
-	Body []byte
+	Body       []byte
 }
 
 type StatementError struct {
@@ -10,6 +10,6 @@ type StatementError struct {
 }
 
 type Neo4jError struct {
-	Code string
+	Code    string
 	Message string
 }

@@ -17,8 +17,8 @@ type Option func(*options)
 type QueryOption func(*queryOptions)
 
 type queryOptions struct {
-	mode   TransactionMode
-	access AccessMode
+	mode     TransactionMode
+	access   AccessMode
 	database string
 }
 
@@ -35,13 +35,13 @@ func WithDatabaseOverride(name string) QueryOption {
 }
 
 type options struct {
-	authKind authKind
+	authKind           authKind
 	username, password string
-	token string
-	logger *slog.Logger
-	timeout time.Duration
-	database string
-	maxResultBytes int64
+	token              string
+	logger             *slog.Logger
+	timeout            time.Duration
+	database           string
+	maxResultBytes     int64
 }
 
 func New(uri string, opts ...Option) (*Service, error) {
@@ -98,7 +98,11 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 func WithTimeout(d time.Duration) Option {
-	return func(o *options) { if d > 0 { o.timeout = d } }
+	return func(o *options) {
+		if d > 0 {
+			o.timeout = d
+		}
+	}
 }
 
 func WithDatabase(name string) Option {
@@ -129,7 +133,9 @@ func (s *Service) ExecuteStream(ctx context.Context, cypher string, params map[s
 }
 
 func (s *Service) BeginTx(ctx context.Context) (*Tx, error) {
-	if tb, ok := s.backend.(interface{ beginTx(ctx context.Context) (*Tx, error) }); ok {
+	if tb, ok := s.backend.(interface {
+		beginTx(ctx context.Context) (*Tx, error)
+	}); ok {
 		return tb.beginTx(ctx)
 	}
 	return nil, fmt.Errorf("transactions not supported for this backend")
@@ -160,14 +166,25 @@ func selectBackend(scheme, uri string, o options) (backend, error) {
 var ErrUnsupportedScheme = &errUnsupportedScheme{}
 
 type errUnsupportedScheme struct{}
+
 func (e *errUnsupportedScheme) Error() string { return "unsupported scheme" }
 
 // Temporal types – added alongside Duration/Point as small package types
 type Date struct{ Year, Month, Day int }
 type LocalTime struct{ Hour, Minute, Second, Nano int }
-type Time struct{ LocalTime LocalTime; Offset string }
-type LocalDateTime struct{ Date Date; LocalTime LocalTime }
-type DateTime struct{ LocalDateTime LocalDateTime; Offset string; Zone string }
+type Time struct {
+	LocalTime LocalTime
+	Offset    string
+}
+type LocalDateTime struct {
+	Date      Date
+	LocalTime LocalTime
+}
+type DateTime struct {
+	LocalDateTime LocalDateTime
+	Offset        string
+	Zone          string
+}
 
 // Streaming line size default
 const defaultMaxStreamLineSize = 10 * 1024 * 1024

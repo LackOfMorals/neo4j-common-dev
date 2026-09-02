@@ -102,7 +102,7 @@ func (b *boltBackend) executeStream(ctx context.Context, stmt string, params map
 		records = append(records, Record{keys: keys, values: values})
 	}
 	return &StreamResult{
-		keys: keys,
+		keys:    keys,
 		records: records,
 		summary: summary,
 		closeFn: func() error { return nil },
@@ -133,11 +133,11 @@ func mapSummary(s neo4j.ResultSummary) Summary {
 	}
 	c := s.Counters()
 	counters := Counters{
-		NodesCreated:              c.NodesCreated(),
-		NodesDeleted:              c.NodesDeleted(),
-		RelationshipsCreated:      c.RelationshipsCreated(),
-		RelationshipsDeleted:      c.RelationshipsDeleted(),
-		PropertiesSet:             c.PropertiesSet(),
+		NodesCreated:         c.NodesCreated(),
+		NodesDeleted:         c.NodesDeleted(),
+		RelationshipsCreated: c.RelationshipsCreated(),
+		RelationshipsDeleted: c.RelationshipsDeleted(),
+		PropertiesSet:        c.PropertiesSet(),
 	}
 	return Summary{
 		QueryType:            qtype,

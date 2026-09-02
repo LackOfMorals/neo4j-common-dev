@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LackOfMorals/neo4jPackages/external/logger"
 	"github.com/LackOfMorals/neo4jPackages/external/config"
+	"github.com/LackOfMorals/neo4jPackages/external/logger"
 )
 
 func main() {

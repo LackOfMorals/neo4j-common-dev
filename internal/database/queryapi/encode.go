@@ -31,7 +31,9 @@ func EncodeValue(v any) (json.RawMessage, error) {
 		enc := make([]json.RawMessage, len(val))
 		for i, e := range val {
 			raw, err := EncodeValue(e)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			enc[i] = raw
 		}
 		b, _ := json.Marshal(enc)
@@ -40,7 +42,9 @@ func EncodeValue(v any) (json.RawMessage, error) {
 		enc := make(map[string]json.RawMessage, len(val))
 		for k, e := range val {
 			raw, err := EncodeValue(e)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			enc[k] = raw
 		}
 		b, _ := json.Marshal(enc)
@@ -68,7 +72,9 @@ func EncodeValue(v any) (json.RawMessage, error) {
 	default:
 		// Fallback: try JSON marshal as String
 		b, err := json.Marshal(val)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		s, _ := json.Marshal(string(b))
 		return json.RawMessage(fmt.Sprintf(`{"$type":"String","_value":%s}`, s)), nil
 	}
@@ -88,12 +94,14 @@ func encodeNode(n Node) (json.RawMessage, error) {
 	props := make(map[string]json.RawMessage, len(n.Properties))
 	for k, v := range n.Properties {
 		raw, err := EncodeValue(v)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		props[k] = raw
 	}
 	w := map[string]any{
 		"_element_id": n.ElementID,
-		"_labels": n.Labels,
+		"_labels":     n.Labels,
 		"_properties": props,
 	}
 	b, _ := json.Marshal(w)
@@ -104,15 +112,17 @@ func encodeRelationship(r Relationship) (json.RawMessage, error) {
 	props := make(map[string]json.RawMessage, len(r.Properties))
 	for k, v := range r.Properties {
 		raw, err := EncodeValue(v)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		props[k] = raw
 	}
 	w := map[string]any{
-		"_element_id": r.ElementID,
+		"_element_id":            r.ElementID,
 		"_start_node_element_id": r.StartElementID,
-		"_end_node_element_id": r.EndElementID,
-		"_type": r.Type,
-		"_properties": props,
+		"_end_node_element_id":   r.EndElementID,
+		"_type":                  r.Type,
+		"_properties":            props,
 	}
 	b, _ := json.Marshal(w)
 	return json.RawMessage(fmt.Sprintf(`{"$type":"Relationship","_value":%s}`, b)), nil
@@ -121,7 +131,9 @@ func encodeRelationship(r Relationship) (json.RawMessage, error) {
 func encodePoint(p Point) (json.RawMessage, error) {
 	// Simplified WKT encoding
 	z := ""
-	if p.Z != nil { z = fmt.Sprintf(" %g", *p.Z) }
+	if p.Z != nil {
+		z = fmt.Sprintf(" %g", *p.Z)
+	}
 	wkt := fmt.Sprintf("SRID=%d;POINT(%g %g%s)", p.SRID, p.X, p.Y, z)
 	b, _ := json.Marshal(wkt)
 	return json.RawMessage(fmt.Sprintf(`{"$type":"Point","_value":%s}`, b)), nil

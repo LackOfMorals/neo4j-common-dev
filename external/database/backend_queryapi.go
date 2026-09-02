@@ -6,22 +6,22 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/LackOfMorals/neo4jPackages/external/httpclient"
+	"github.com/LackOfMorals/neo4jPackages/internal/database/queryapi"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"github.com/LackOfMorals/neo4jPackages/external/httpclient"
-	"github.com/LackOfMorals/neo4jPackages/internal/database/queryapi"
 )
 
 type queryAPIBackend struct {
-	http *httpclient.Service
-	baseURL string
-	database string
+	http           *httpclient.Service
+	baseURL        string
+	database       string
 	maxResultBytes int64
-	versionOnce sync.Once
-	versionErr error
+	versionOnce    sync.Once
+	versionErr     error
 }
 
 func newQueryAPIBackend(uri string, o options) (backend, error) {
@@ -45,9 +45,9 @@ func newQueryAPIBackend(uri string, o options) (backend, error) {
 	}
 	svc := httpclient.New(baseURL, o.timeout, opts...)
 	return &queryAPIBackend{
-		http: svc,
-		baseURL: baseURL,
-		database: o.database,
+		http:           svc,
+		baseURL:        baseURL,
+		database:       o.database,
 		maxResultBytes: o.maxResultBytes,
 	}, nil
 }
@@ -97,7 +97,7 @@ func (b *queryAPIBackend) executeBuffered(ctx context.Context, stmt string, para
 		encodedParams[k] = raw
 	}
 	req := map[string]any{
-		"statement": stmt,
+		"statement":  stmt,
 		"parameters": encodedParams,
 	}
 	if access == Read {
@@ -107,7 +107,7 @@ func (b *queryAPIBackend) executeBuffered(ctx context.Context, stmt string, para
 	endpoint := fmt.Sprintf("/db/%s/query/v2", db)
 	headers := map[string]string{
 		"Content-Type": "application/json",
-		"Accept": "application/vnd.neo4j.query.v1.1",
+		"Accept":       "application/vnd.neo4j.query.v1.1",
 	}
 	resp, respBody, err := b.http.Do(ctx, "POST", endpoint, headers, body)
 	if err != nil {
@@ -128,15 +128,19 @@ func (b *queryAPIBackend) executeBuffered(ctx context.Context, stmt string, para
 		Keys: qr.Data.Fields,
 	}
 	summary := Summary{
-		Database: db,
+		Database:  db,
 		Bookmarks: qr.Bookmarks,
 	}
 	if qr.QueryType != "" {
 		switch qr.QueryType {
-		case "r": summary.QueryType = QueryTypeRead
-		case "w": summary.QueryType = QueryTypeWrite
-		case "rw": summary.QueryType = QueryTypeReadWrite
-		case "s": summary.QueryType = QueryTypeSchema
+		case "r":
+			summary.QueryType = QueryTypeRead
+		case "w":
+			summary.QueryType = QueryTypeWrite
+		case "rw":
+			summary.QueryType = QueryTypeReadWrite
+		case "s":
+			summary.QueryType = QueryTypeSchema
 		}
 	}
 	result.Summary = summary
@@ -246,7 +250,10 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 			resp.Body.Close()
 			return nil, fmt.Errorf("stream: no data")
 		}
-		var ev struct{ Event string `json:"$event"`; Body json.RawMessage `json:"_body"` }
+		var ev struct {
+			Event string          `json:"$event"`
+			Body  json.RawMessage `json:"_body"`
+		}
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
 			resp.Body.Close()
 			return nil, fmt.Errorf("stream header decode: %w", err)
@@ -255,7 +262,9 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 			resp.Body.Close()
 			return nil, fmt.Errorf("stream: expected Header event, got %s", ev.Event)
 		}
-		var header struct{ Fields []string `json:"fields"` }
+		var header struct {
+			Fields []string `json:"fields"`
+		}
 		if err := json.Unmarshal(ev.Body, &header); err != nil {
 			resp.Body.Close()
 			return nil, fmt.Errorf("stream header body decode: %w", err)
@@ -268,7 +277,10 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 		// To keep it lazy, we return a StreamResult with a custom closeFn that commits/rollbacks.
 		for scanner.Scan() {
 			line := scanner.Bytes()
-			var e struct{ Event string `json:"$event"`; Body json.RawMessage `json:"_body"` }
+			var e struct {
+				Event string          `json:"$event"`
+				Body  json.RawMessage `json:"_body"`
+			}
 			if err := json.Unmarshal(line, &e); err != nil {
 				streamErr = fmt.Errorf("stream event decode: %w", err)
 				break
@@ -296,22 +308,22 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 			case "Summary":
 				var s struct {
 					QueryType string `json:"queryType"`
-					Counters struct {
-						NodesCreated int `json:"nodesCreated"`
-						NodesDeleted int `json:"nodesDeleted"`
+					Counters  struct {
+						NodesCreated         int `json:"nodesCreated"`
+						NodesDeleted         int `json:"nodesDeleted"`
 						RelationshipsCreated int `json:"relationshipsCreated"`
 						RelationshipsDeleted int `json:"relationshipsDeleted"`
-						PropertiesSet int `json:"propertiesSet"`
+						PropertiesSet        int `json:"propertiesSet"`
 					} `json:"counters"`
 				}
 				_ = json.Unmarshal(e.Body, &s)
 				summary.QueryType = QueryType(s.QueryType)
 				summary.Counters = Counters{
-					NodesCreated: s.Counters.NodesCreated,
-					NodesDeleted: s.Counters.NodesDeleted,
+					NodesCreated:         s.Counters.NodesCreated,
+					NodesDeleted:         s.Counters.NodesDeleted,
 					RelationshipsCreated: s.Counters.RelationshipsCreated,
 					RelationshipsDeleted: s.Counters.RelationshipsDeleted,
-					PropertiesSet: s.Counters.PropertiesSet,
+					PropertiesSet:        s.Counters.PropertiesSet,
 				}
 				break
 			case "Error":
@@ -338,7 +350,7 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 			}
 			// commit
 			commitEndpoint := fmt.Sprintf("/db/%s/query/v2/tx/%s/commit", db, txID)
-			commitResp, commitBody, err := b.http.Do(ctx, "POST", commitEndpoint, map[string]string{"Content-Type":"application/json","Accept":"application/json"}, nil)
+			commitResp, commitBody, err := b.http.Do(ctx, "POST", commitEndpoint, map[string]string{"Content-Type": "application/json", "Accept": "application/json"}, nil)
 			if err != nil {
 				return err
 			}
@@ -349,7 +361,7 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 			return nil
 		}
 		return &StreamResult{
-			keys: keys,
+			keys:    keys,
 			records: records,
 			summary: summary,
 			closeFn: closeFn,
@@ -457,40 +469,45 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 		case "Summary":
 			var s struct {
 				QueryType string `json:"queryType"`
-				Counters struct {
-					NodesCreated int `json:"nodesCreated"`
-					NodesDeleted int `json:"nodesDeleted"`
+				Counters  struct {
+					NodesCreated         int `json:"nodesCreated"`
+					NodesDeleted         int `json:"nodesDeleted"`
 					RelationshipsCreated int `json:"relationshipsCreated"`
 					RelationshipsDeleted int `json:"relationshipsDeleted"`
-					PropertiesSet int `json:"propertiesSet"`
+					PropertiesSet        int `json:"propertiesSet"`
 				} `json:"counters"`
-				ResultAvailableAfter int64 `json:"resultAvailableAfter"`
-				ResultConsumedAfter int64 `json:"resultConsumedAfter"`
-				Bookmarks []string `json:"bookmarks"`
-				Database string `json:"database"`
+				ResultAvailableAfter int64    `json:"resultAvailableAfter"`
+				ResultConsumedAfter  int64    `json:"resultConsumedAfter"`
+				Bookmarks            []string `json:"bookmarks"`
+				Database             string   `json:"database"`
 			}
 			if err := json.Unmarshal(e.Body, &s); err == nil {
 				var qt QueryType
 				switch s.QueryType {
-				case "r": qt = QueryTypeRead
-				case "w": qt = QueryTypeWrite
-				case "rw": qt = QueryTypeReadWrite
-				case "s": qt = QueryTypeSchema
-				default: qt = QueryTypeUnknown
+				case "r":
+					qt = QueryTypeRead
+				case "w":
+					qt = QueryTypeWrite
+				case "rw":
+					qt = QueryTypeReadWrite
+				case "s":
+					qt = QueryTypeSchema
+				default:
+					qt = QueryTypeUnknown
 				}
 				summary = Summary{
 					QueryType: qt,
 					Counters: Counters{
-						NodesCreated: s.Counters.NodesCreated,
-						NodesDeleted: s.Counters.NodesDeleted,
+						NodesCreated:         s.Counters.NodesCreated,
+						NodesDeleted:         s.Counters.NodesDeleted,
 						RelationshipsCreated: s.Counters.RelationshipsCreated,
 						RelationshipsDeleted: s.Counters.RelationshipsDeleted,
-						PropertiesSet: s.Counters.PropertiesSet,
+						PropertiesSet:        s.Counters.PropertiesSet,
 					},
 					ResultAvailableAfter: time.Duration(s.ResultAvailableAfter),
-					ResultConsumedAfter: time.Duration(s.ResultConsumedAfter),
-					Database: s.Database,
-					Bookmarks: s.Bookmarks,
+					ResultConsumedAfter:  time.Duration(s.ResultConsumedAfter),
+					Database:             s.Database,
+					Bookmarks:            s.Bookmarks,
 				}
 			}
 		case "Error":
@@ -505,7 +522,7 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 	}
 
 	res := &StreamResult{
-		keys: keys,
+		keys:    keys,
 		records: records,
 		summary: summary,
 		closeFn: func() error {

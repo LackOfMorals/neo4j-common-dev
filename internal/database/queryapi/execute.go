@@ -88,21 +88,21 @@ func (s *Service) ExecuteStream(ctx context.Context, req ExecuteRequest) (<-chan
 
 type QuerySummary struct {
 	QueryType string `json:"queryType"`
-	Counters struct {
-		NodesCreated            int `json:"nodesCreated"`
-		NodesDeleted            int `json:"nodesDeleted"`
-		RelationshipsCreated     int `json:"relationshipsCreated"`
-		RelationshipsDeleted     int `json:"relationshipsDeleted"`
-		PropertiesSet           int `json:"propertiesSet"`
-		LabelsAdded             int `json:"labelsAdded"`
-		LabelsRemoved           int `json:"labelsRemoved"`
-		IndexesAdded            int `json:"indexesAdded"`
-		IndexesRemoved          int `json:"indexesRemoved"`
-		ConstraintsAdded        int `json:"constraintsAdded"`
-		ConstraintsRemoved      int `json:"constraintsRemoved"`
+	Counters  struct {
+		NodesCreated         int `json:"nodesCreated"`
+		NodesDeleted         int `json:"nodesDeleted"`
+		RelationshipsCreated int `json:"relationshipsCreated"`
+		RelationshipsDeleted int `json:"relationshipsDeleted"`
+		PropertiesSet        int `json:"propertiesSet"`
+		LabelsAdded          int `json:"labelsAdded"`
+		LabelsRemoved        int `json:"labelsRemoved"`
+		IndexesAdded         int `json:"indexesAdded"`
+		IndexesRemoved       int `json:"indexesRemoved"`
+		ConstraintsAdded     int `json:"constraintsAdded"`
+		ConstraintsRemoved   int `json:"constraintsRemoved"`
 	} `json:"counters"`
-	ResultAvailableAfter int64  `json:"resultAvailableAfter"`
-	ResultConsumedAfter  int64  `json:"resultConsumedAfter"`
+	ResultAvailableAfter int64    `json:"resultAvailableAfter"`
+	ResultConsumedAfter  int64    `json:"resultConsumedAfter"`
 	Bookmarks            []string `json:"bookmarks"`
 	Database             string   `json:"database"`
 }
@@ -189,7 +189,9 @@ func (s *Service) ExecuteStreamResult(ctx context.Context, req ExecuteRequest) (
 		resp.Body.Close()
 		return nil, fmt.Errorf("stream: expected Header event, got %s", ev.Event)
 	}
-	var header struct{ Fields []string `json:"fields"` }
+	var header struct {
+		Fields []string `json:"fields"`
+	}
 	if err := json.Unmarshal(ev.Body, &header); err != nil {
 		resp.Body.Close()
 		return nil, fmt.Errorf("stream header body decode: %w", err)
@@ -200,4 +202,3 @@ func (s *Service) ExecuteStreamResult(ctx context.Context, req ExecuteRequest) (
 		body:    resp.Body,
 	}, nil
 }
-

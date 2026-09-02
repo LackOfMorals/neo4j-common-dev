@@ -10,7 +10,7 @@ type QueryResponse struct {
 }
 
 type DataSection struct {
-	Fields []string           `json:"fields"`
+	Fields []string            `json:"fields"`
 	Values [][]json.RawMessage `json:"values"`
 }
 
