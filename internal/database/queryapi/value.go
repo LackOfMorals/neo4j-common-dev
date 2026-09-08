@@ -255,12 +255,24 @@ func decodePoint(raw json.RawMessage) (Point, error) {
 	if m == nil {
 		return Point{}, fmt.Errorf("decode Point: unrecognized WKT %q", s)
 	}
-	srid, _ := strconv.ParseInt(m[1], 10, 64)
-	x, _ := strconv.ParseFloat(m[3], 64)
-	y, _ := strconv.ParseFloat(m[4], 64)
+	srid, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return Point{}, fmt.Errorf("decode Point %q: SRID: %w", s, err)
+	}
+	x, err := strconv.ParseFloat(m[3], 64)
+	if err != nil {
+		return Point{}, fmt.Errorf("decode Point %q: X: %w", s, err)
+	}
+	y, err := strconv.ParseFloat(m[4], 64)
+	if err != nil {
+		return Point{}, fmt.Errorf("decode Point %q: Y: %w", s, err)
+	}
 	p := Point{SRID: int(srid), X: x, Y: y}
 	if m[5] != "" {
-		z, _ := strconv.ParseFloat(m[5], 64)
+		z, err := strconv.ParseFloat(m[5], 64)
+		if err != nil {
+			return Point{}, fmt.Errorf("decode Point %q: Z: %w", s, err)
+		}
 		p.Z = &z
 	}
 	return p, nil

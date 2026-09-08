@@ -29,17 +29,45 @@ const (
 	QueryTypeSchema    QueryType = "s"
 )
 
+// Counters reports how many graph elements a write statement touched.
+// Every count field is zero for a read-only statement.
 type Counters struct {
 	NodesCreated, NodesDeleted                 int
 	RelationshipsCreated, RelationshipsDeleted int
 	PropertiesSet                              int
+	LabelsAdded, LabelsRemoved                 int
+	IndexesAdded, IndexesRemoved               int
+	ConstraintsAdded, ConstraintsRemoved       int
+	ContainsUpdates, ContainsSystemUpdates     bool
 }
 
+// NotificationPosition locates a Notification within the submitted query
+// text. nil on the owning Notification when it isn't tied to a position.
+type NotificationPosition struct {
+	Offset int
+	Line   int
+	Column int
+}
+
+// Notification is a server-emitted diagnostic about a statement (unused
+// variable, deprecated function, missing index, ...), independent of whether
+// the statement also produced an error.
+type Notification struct {
+	Code        string
+	Title       string
+	Description string
+	Severity    string
+	Category    string
+	Position    *NotificationPosition
+}
+
+// Summary carries execution metadata common to both backends.
 type Summary struct {
 	QueryType            QueryType
 	Counters             Counters
 	ResultAvailableAfter time.Duration
 	ResultConsumedAfter  time.Duration
+	Notifications        []Notification
 	Database             string
 	Bookmarks            []string
 }

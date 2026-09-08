@@ -86,6 +86,9 @@ func (s *Service) ExecuteStream(ctx context.Context, req ExecuteRequest) (<-chan
 	return ch, nil
 }
 
+// QuerySummary is the body of a stream Summary event. Timings are in
+// milliseconds; notifications use the same wire shape as the buffered
+// response's top-level notifications array.
 type QuerySummary struct {
 	QueryType string `json:"queryType"`
 	Counters  struct {
@@ -101,10 +104,11 @@ type QuerySummary struct {
 		ConstraintsAdded     int `json:"constraintsAdded"`
 		ConstraintsRemoved   int `json:"constraintsRemoved"`
 	} `json:"counters"`
-	ResultAvailableAfter int64    `json:"resultAvailableAfter"`
-	ResultConsumedAfter  int64    `json:"resultConsumedAfter"`
-	Bookmarks            []string `json:"bookmarks"`
-	Database             string   `json:"database"`
+	ResultAvailableAfter int64              `json:"resultAvailableAfter"`
+	ResultConsumedAfter  int64              `json:"resultConsumedAfter"`
+	Notifications        []NotificationWire `json:"notifications"`
+	Bookmarks            []string           `json:"bookmarks"`
+	Database             string             `json:"database"`
 }
 
 // StreamResult is a scanner-based streaming result matching the facade's StreamResult shape.
