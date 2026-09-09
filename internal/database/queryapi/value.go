@@ -77,7 +77,7 @@ func DecodeValue(raw json.RawMessage) (any, error) {
 	case "DateTime":
 		return decodeDateTime(tv.Value)
 	default:
-		return RawTypedValue{Type: tv.Type, Value: tv.Value}, nil
+		return RawTypedValue(tv), nil
 	}
 }
 

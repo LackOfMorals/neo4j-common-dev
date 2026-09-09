@@ -89,7 +89,7 @@ func (s *Service) Read(args []string) (Values, error) {
 // which only knows about flags.
 func (s *Service) printUsage(fs *flag.FlagSet) func() {
 	return func() {
-		fmt.Fprintf(fs.Output(), "Usage:")
+		_, _ = fmt.Fprintf(fs.Output(), "Usage:")
 		for _, f := range s.fields {
 			var sources []string
 			if f.Flag != "" {
@@ -98,12 +98,12 @@ func (s *Service) printUsage(fs *flag.FlagSet) func() {
 			if f.EnvVar != "" {
 				sources = append(sources, f.EnvVar)
 			}
-			fmt.Fprintf(fs.Output(), "  %s\n", strings.Join(sources, " / "))
+			_, _ = fmt.Fprintf(fs.Output(), "  %s\n", strings.Join(sources, " / "))
 			if f.Description != "" {
-				fmt.Fprintf(fs.Output(), "\t%s\n", f.Description)
+				_, _ = fmt.Fprintf(fs.Output(), "\t%s\n", f.Description)
 			}
 			if f.Default != "" {
-				fmt.Fprintf(fs.Output(), "\t(default %q)\n", f.Default)
+				_, _ = fmt.Fprintf(fs.Output(), "\t(default %q)\n", f.Default)
 			}
 		}
 	}

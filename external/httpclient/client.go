@@ -124,7 +124,7 @@ func (s *Service) Do(ctx context.Context, method, endpoint string, headers map[s
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	limited := io.LimitReader(resp.Body, s.maxResponseSize+1)
 	data, err := io.ReadAll(limited)

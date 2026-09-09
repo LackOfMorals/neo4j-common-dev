@@ -31,9 +31,10 @@ func newQueryAPIBackend(uri string, o options) (backend, error) {
 	}
 	baseURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
 	headers := map[string]string{}
-	if o.authKind == authBearer {
+	switch o.authKind {
+	case authBearer:
 		headers["Authorization"] = "Bearer " + o.token
-	} else if o.authKind == authBasic {
+	case authBasic:
 		cred := base64.StdEncoding.EncodeToString([]byte(o.username + ":" + o.password))
 		headers["Authorization"] = "Basic " + cred
 	}
@@ -240,14 +241,14 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			buf := make([]byte, 4096)
 			n, _ := resp.Body.Read(buf)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, &TransportError{StatusCode: resp.StatusCode, Body: buf[:n], Err: fmt.Errorf("stream tx run failed with status %d", resp.StatusCode)}
 		}
 		// Stream parsing
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
 		if !scanner.Scan() {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("stream: no data")
 		}
 		var ev struct {
@@ -255,18 +256,18 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 			Body  json.RawMessage `json:"_body"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("stream header decode: %w", err)
 		}
 		if ev.Event != "Header" {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("stream: expected Header event, got %s", ev.Event)
 		}
 		var header struct {
 			Fields []string `json:"fields"`
 		}
 		if err := json.Unmarshal(ev.Body, &header); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("stream header body decode: %w", err)
 		}
 		keys := header.Fields
@@ -325,10 +326,8 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 					RelationshipsDeleted: s.Counters.RelationshipsDeleted,
 					PropertiesSet:        s.Counters.PropertiesSet,
 				}
-				break
 			case "Error":
 				streamErr = fmt.Errorf("stream error event")
-				break
 			}
 			if streamErr != nil {
 				break
@@ -396,7 +395,7 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 		// Read limited body for diagnostics
 		buf := make([]byte, 4096)
 		n, _ := resp.Body.Read(buf)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, &TransportError{StatusCode: resp.StatusCode, Body: buf[:n], Err: fmt.Errorf("stream request failed with status %d", resp.StatusCode)}
 	}
 	// Ensure body is closed on StreamResult.Close
@@ -408,7 +407,7 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 
 	// Read Header event
 	if !scanner.Scan() {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream: no data")
 	}
 	var ev struct {
@@ -416,18 +415,18 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 		Body  json.RawMessage `json:"_body"`
 	}
 	if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream header decode: %w", err)
 	}
 	if ev.Event != "Header" {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream: expected Header event, got %s", ev.Event)
 	}
 	var header struct {
 		Fields []string `json:"fields"`
 	}
 	if err := json.Unmarshal(ev.Body, &header); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream header body decode: %w", err)
 	}
 	keys := header.Fields
@@ -531,7 +530,7 @@ func (b *queryAPIBackend) executeStream(ctx context.Context, stmt string, params
 	}
 	if streamErr != nil {
 		// Close body before returning error
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, streamErr
 	}
 	return res, nil

@@ -29,7 +29,7 @@ func (s *Service) Execute(ctx context.Context, req ExecuteRequest) (*QueryRespon
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func (s *Service) ExecuteStream(ctx context.Context, req ExecuteRequest) (<-chan
 	ch := make(chan StreamEvent)
 	go func() {
 		defer close(ch)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		dec := json.NewDecoder(resp.Body)
 		for {
 			var ev StreamEvent
@@ -175,29 +175,29 @@ func (s *Service) ExecuteStreamResult(ctx context.Context, req ExecuteRequest) (
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream request failed with status %d", resp.StatusCode)
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
 	if !scanner.Scan() {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream: no data")
 	}
 	var ev StreamEvent
 	if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream header decode: %w", err)
 	}
 	if ev.Event != "Header" {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream: expected Header event, got %s", ev.Event)
 	}
 	var header struct {
 		Fields []string `json:"fields"`
 	}
 	if err := json.Unmarshal(ev.Body, &header); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream header body decode: %w", err)
 	}
 	return &StreamResult{

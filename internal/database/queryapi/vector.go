@@ -11,11 +11,11 @@ func decodeVector(raw json.RawMessage) (Vector, error) {
 		return Vector{}, fmt.Errorf("decode Vector: %w", err)
 	}
 	// Values are already decoded as []float64 by Unmarshal
-	return Vector{Values: v.Values}, nil
+	return Vector(v), nil
 }
 
 func encodeVector(v Vector) (json.RawMessage, error) {
-	w := VectorWire{Values: v.Values}
+	w := VectorWire(v)
 	b, _ := json.Marshal(w)
 	return json.RawMessage(fmt.Sprintf(`{"$type":"Vector","_value":%s}`, b)), nil
 }

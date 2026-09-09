@@ -267,7 +267,4 @@ type DateTime struct {
 	Zone          string
 }
 
-// Streaming line size default
-const defaultMaxStreamLineSize = 10 * 1024 * 1024
-
 var _ = errors.Is // keep errors import (used by callers via sentinels)
