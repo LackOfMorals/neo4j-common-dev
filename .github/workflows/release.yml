@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    # Needs write access to create the GitHub Release
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -----------------------------------------------------------------
+      # Gate: tests must pass before any release artefact is created
+      # -----------------------------------------------------------------
+      - name: Run tests
+        run: go test -race $(go list ./... | grep -v /examples/)
+
+      # -----------------------------------------------------------------
+      # Extract the changelog section for this version.
+      # CHANGELOG.md format (changie):
+      #   ## v1.9.0 - 2026-04-23
+      #   ### Fixed
+      #   * ...
+      #
+      # The awk program collects every line between the heading for this
+      # version and the next ## heading, trimming leading/trailing blanks.
+      # -----------------------------------------------------------------
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          awk -v ver="$VERSION" '
+            /^## / && index($0, "## " ver " ") == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}' > release_notes.md
+
+          if [ ! -s release_notes.md ]; then
+            echo "No changelog entry found for $VERSION -- using default message."
+            echo "See CHANGELOG.md for full history." > release_notes.md
+          fi
+
+          cat release_notes.md
+
+      # -----------------------------------------------------------------
+      # Create the GitHub Release.  The release body comes from the
+      # extracted changelog section above.  For a Go module there are no
+      # binary artefacts; the tag itself is what consumers get via go get.
+      # -----------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
