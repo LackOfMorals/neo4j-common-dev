@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/LackOfMorals/neo4jPackages/external/database"
 	"log"
+
+	"github.com/LackOfMorals/neo4jPackages/external/database"
 )
 
 func main() {
@@ -14,7 +15,13 @@ func main() {
 		log.Fatal(err)
 	}
 	// cleanup
-	svc.Execute(ctx, "MATCH (n:TestStream) DETACH DELETE n", nil)
+	_, err = svc.Execute(ctx, "MATCH (n:TestStream) DETACH DELETE n", nil)
+
+	// something went wrong with the cleanup
+	if err != nil {
+		fmt.Printf("Error when cleaning up %v", err)
+	}
+
 	stream, err := svc.ExecuteStream(ctx, "UNWIND range(1,3) AS i CREATE (n:TestStream {id:i}) RETURN n", nil, database.WithTransactionMode(database.Explicit))
 	if err != nil {
 		log.Fatal(err)

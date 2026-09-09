@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+
 	"github.com/LackOfMorals/neo4jPackages/external/database"
 )
 
@@ -35,7 +36,11 @@ func main() {
 		fmt.Printf("  row %d: %v\n", count, v)
 	}
 	fmt.Printf("Stream summary query type: %v, bookmarks: %v\n", stream.Summary().QueryType, stream.Summary().Bookmarks)
-	stream.Close()
+
+	err = stream.Close()
+	if err != nil {
+		panic(err)
+	}
 
 	// 3. Explicit mode single statement
 	res2, err := svc.Execute(ctx, "CREATE (n:TestNode {id:1}) RETURN n", nil, database.WithTransactionMode(database.Explicit))

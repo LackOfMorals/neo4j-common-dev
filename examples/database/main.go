@@ -17,7 +17,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("bolt New failed: %v", err)
 	}
-	defer boltSvc.Close(ctx)
+
+	// This is how we check for an error when using defer
+	defer func() {
+		if cerr := boltSvc.Close(ctx); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	fmt.Println("=== Bolt Backend ===")
 	res, err := boltSvc.Execute(ctx, "RETURN 1 AS n", nil)
@@ -38,7 +44,11 @@ func main() {
 		v, _ := rec.Get("n")
 		fmt.Printf("  row: %v\n", v)
 	}
-	stream.Close()
+
+	err = stream.Close()
+	if err != nil {
+		log.Fatalf("closing the streamed failed: %v", err)
+	}
 
 	// Query API backend example
 	httpURI := "http://neo4j:password@localhost:7474"
@@ -46,7 +56,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("http New failed: %v", err)
 	}
-	defer httpSvc.Close(ctx)
+
+	// This is how we check for an error when using defer
+	defer func() {
+		if herr := httpSvc.Close(ctx); herr != nil && err == nil {
+			err = herr
+		}
+	}()
 
 	fmt.Println("\n=== Query API Backend ===")
 	res2, err := httpSvc.Execute(ctx, "RETURN 2 AS n", nil, database.WithTransactionMode(database.Implicit))

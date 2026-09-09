@@ -89,7 +89,7 @@ func (s *Service) Read(args []string) (Values, error) {
 // which only knows about flags.
 func (s *Service) printUsage(fs *flag.FlagSet) func() {
 	return func() {
-		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintf(fs.Output(), "Usage:")
 		for _, f := range s.fields {
 			var sources []string
 			if f.Flag != "" {
